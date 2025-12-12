@@ -8,7 +8,7 @@ import { HomeSchemeCard } from "@/components/scheme/HomeSchemeCard";
 
 import { useAuth } from "@/context/AuthContext";
 
-import adminLogo from "../../../assets/logo-admin.png";
+import adminLogo from "../../../public/logo-admin.png";
 
 import { useSchemes } from "@/hooks/useSchemes";
 

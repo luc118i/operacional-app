@@ -165,7 +165,6 @@ export default function App() {
           <LocationCreatePage onBack={handleBackToHome} />
         )}
       </main>
-
       {/* Footer global */}
       <Footer />
 
