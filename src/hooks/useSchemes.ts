@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { OperationalScheme, SchemeListItem } from "@/types/scheme";
-import { mapToOperationalScheme } from "@/lib/mapToOperationalScheme";
+import { API_URL } from "@/services/api";
 
 export function useSchemes() {
   const [data, setData] = useState<SchemeListItem[]>([]);
@@ -12,7 +12,7 @@ export function useSchemes() {
       try {
         setLoading(true);
 
-        const res = await fetch("http://localhost:3333/schemes");
+        const res = await fetch(`${API_URL}/schemes`);
         if (!res.ok) throw new Error("Erro ao buscar esquemas");
 
         const json = (await res.json()) as SchemeListItem[];

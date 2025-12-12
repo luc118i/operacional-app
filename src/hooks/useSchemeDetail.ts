@@ -22,7 +22,7 @@ export function useSchemeDetail(schemeId: string | null) {
   useEffect(() => {
     if (!schemeId) return;
 
-    const baseUrl = import.meta.env.VITE_API_URL ?? "http://localhost:3333";
+    const baseUrl = import.meta.env.VITE_API_URL;
 
     async function load() {
       try {

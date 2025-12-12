@@ -1,5 +1,6 @@
 // src/hooks/useSchemeSummary.ts
 import { useEffect, useState } from "react";
+import { API_URL } from "@/services/api";
 
 export interface SchemeSummary {
   totalKm: number;
@@ -31,9 +32,7 @@ export function useSchemeSummary(schemeId: string) {
         setLoading(true);
         setError(null);
 
-        const res = await fetch(
-          `http://localhost:3333/schemes/${schemeId}/summary`
-        );
+        const res = await fetch(`${API_URL}/schemes/${schemeId}/summary`);
 
         if (!res.ok) {
           throw new Error("Erro ao buscar resumo do esquema");

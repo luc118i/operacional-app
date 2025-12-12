@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import type { OperationalScheme } from "@/types/scheme";
 import { mapToOperationalScheme } from "@/lib/mapToOperationalScheme";
-import { API_URL } from "@/services/api";
+import { API_URL } from "./../services/api";
 
 export function useScheme(id: string) {
   const [data, setData] = useState<OperationalScheme | null>(null);

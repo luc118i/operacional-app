@@ -1,3 +1,6 @@
 node_modules/
 dist/
 .vite/
+build
+.env
+.env.production
