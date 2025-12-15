@@ -1,5 +1,5 @@
 // src/pages/SchemeDetail/SchemeDetailPage.tsx
-import { ArrowLeft, MapPin, Route as RouteIcon } from "lucide-react";
+import { ArrowLeft, MapPin } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -7,12 +7,10 @@ import { Badge } from "@/components/ui/badge";
 
 import { DetailPointCard } from "@/components/scheme/DetailPointCard";
 import { DetailSummary } from "@/components/scheme/DetailSummary";
-
 import { DetailFirstPointCard } from "@/components/scheme/DetailFirstPointCard";
 
 import { useScheme } from "@/hooks/useScheme";
 
-// 🆕 JSON de linhas ANTT
 import linhasJson from "@/data/lista-de-linhas.json";
 
 interface SchemeDetailPageProps {
@@ -36,7 +34,6 @@ type LinhaMeta = {
 export function SchemeDetailPage({ schemeId, onBack }: SchemeDetailPageProps) {
   const { data: scheme, loading, error } = useScheme(schemeId);
 
-  // ⏳ LOADING
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center text-slate-600">
@@ -45,7 +42,6 @@ export function SchemeDetailPage({ schemeId, onBack }: SchemeDetailPageProps) {
     );
   }
 
-  // ❌ ERROR
   if (error || !scheme) {
     return (
       <div className="min-h-screen flex items-center justify-center text-red-600">
@@ -54,54 +50,29 @@ export function SchemeDetailPage({ schemeId, onBack }: SchemeDetailPageProps) {
     );
   }
 
-  // 🔐 garante sempre arrays válidos
+  // ✅ única fonte de verdade para pontos: routePoints
   const routePoints = scheme.routePoints ?? [];
 
-  // 👉 ponto inicial real vindo do banco (isInitial)
+  // ✅ ponto inicial REAL: isInitial (fallback: índice 0)
   const initialIndex = routePoints.findIndex((p) => p.isInitial);
   const safeInitialIndex = initialIndex >= 0 ? initialIndex : 0;
-  const initialRoutePoint =
-    routePoints.find((p) => p.isInitial) ?? routePoints[0] ?? null;
+  const initialRoutePoint = routePoints[safeInitialIndex] ?? null;
 
-  // 👉 o que vamos mostrar no card "Ponto Inicial"
+  // ✅ display do ponto inicial vem SEMPRE do routePoints (não usa scheme.initialPoint)
   const displayInitialPoint = initialRoutePoint
     ? {
-        name: initialRoutePoint.location.name,
-        city: initialRoutePoint.location.city,
-        state: initialRoutePoint.location.state,
+        name: initialRoutePoint.location?.name ?? "",
+        city: initialRoutePoint.location?.city ?? "",
+        state: initialRoutePoint.location?.state ?? "",
       }
-    : scheme.initialPoint ?? null;
+    : null;
 
-  const allPoints = [
-    ...(scheme.initialPoint ? [scheme.initialPoint] : []),
-    ...routePoints,
-  ];
-
-  // 🆕 Mesclagem BANCO + JSON
+  // ✅ JSON ANTT
   const linhas = linhasJson as LinhaMeta[];
-
-  // 👉 aqui estou assumindo que o Prefixo do JSON é o mesmo que scheme.lineCode
-  //    se for outro campo do esquema, é só trocar o `scheme.lineCode` abaixo
   const linhaMeta = linhas.find((l) => l.Prefixo === scheme.lineCode);
 
-  // Campos "mesclados": prioriza JSON, cai pro banco se não tiver
-  const originCity =
-    linhaMeta?.["Município Origem"] || scheme.origin || "Origem não informada";
-  const originState = linhaMeta?.["UF Origem"] || scheme.originState || "--";
-  const destinationCity =
-    linhaMeta?.["Município Destino"] ||
-    scheme.destination ||
-    "Destino não informado";
-  const destinationState =
-    linhaMeta?.["UF Destino"] || scheme.destinationState || "--";
-
-  const originInstallation = linhaMeta?.["Instalação Origem"];
-  const destinationInstallation = linhaMeta?.["Instalação Destino"];
-
   const companyName = linhaMeta?.["Nome Empresa"] || "Empresa não informada";
-
   const prefixo = linhaMeta?.Prefixo || scheme.lineCode || "--";
-
   const situacao = linhaMeta?.Situação;
 
   return (
@@ -118,9 +89,11 @@ export function SchemeDetailPage({ schemeId, onBack }: SchemeDetailPageProps) {
               <ArrowLeft className="w-4 h-4 mr-2" />
               Voltar
             </Button>
+
             <div className="flex-1">
               <div className="flex items-center gap-2 flex-wrap">
                 <h1 className="text-slate-900">Esquema Operacional</h1>
+
                 <Badge
                   variant="outline"
                   className={
@@ -131,6 +104,7 @@ export function SchemeDetailPage({ schemeId, onBack }: SchemeDetailPageProps) {
                 >
                   {scheme.direction}
                 </Badge>
+
                 {situacao && (
                   <Badge
                     variant="outline"
@@ -141,7 +115,6 @@ export function SchemeDetailPage({ schemeId, onBack }: SchemeDetailPageProps) {
                 )}
               </div>
 
-              {/* 🆕 Empresa + Prefixo embaixo do título */}
               <p className="text-xs text-slate-500 mt-1">
                 {companyName} • Prefixo{" "}
                 <span className="font-semibold text-slate-800">{prefixo}</span>
@@ -170,17 +143,18 @@ export function SchemeDetailPage({ schemeId, onBack }: SchemeDetailPageProps) {
               <p className="text-slate-900">{scheme.lineName}</p>
             </div>
 
-            {/* Origem → Destino vindo SÓ do JSON */}
             <div>
               <label className="text-slate-600 text-sm mb-1 block">
                 Origem → Destino
               </label>
+
               {linhaMeta ? (
                 <>
                   <p className="text-slate-900">
                     {linhaMeta["Município Origem"]} ({linhaMeta["UF Origem"]}) →{" "}
                     {linhaMeta["Município Destino"]} ({linhaMeta["UF Destino"]})
                   </p>
+
                   {(linhaMeta["Instalação Origem"] ||
                     linhaMeta["Instalação Destino"]) && (
                     <p className="text-xs text-slate-500 mt-1 truncate">
@@ -204,7 +178,6 @@ export function SchemeDetailPage({ schemeId, onBack }: SchemeDetailPageProps) {
               <p className="text-slate-900">{scheme.tripTime}</p>
             </div>
 
-            {/* Empresa (só JSON) */}
             <div>
               <label className="text-slate-600 text-sm mb-1 block">
                 Empresa
@@ -214,7 +187,6 @@ export function SchemeDetailPage({ schemeId, onBack }: SchemeDetailPageProps) {
               </p>
             </div>
 
-            {/* Prefixo ANTT (só JSON) */}
             <div>
               <label className="text-slate-600 text-sm mb-1 block">
                 Prefixo ANTT
@@ -225,24 +197,26 @@ export function SchemeDetailPage({ schemeId, onBack }: SchemeDetailPageProps) {
             </div>
           </div>
 
-          {/* Ponto inicial continua vindo do esquema do banco */}
+          {/* Ponto Inicial (somente routePoints) */}
           <div className="mt-4 pt-4 border-t border-slate-200">
             <label className="text-slate-600 text-sm mb-2 block">
               Ponto Inicial
             </label>
+
             <div className="flex items-center gap-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
               <MapPin className="w-5 h-5 text-blue-600 flex-shrink-0" />
               <div>
-                <p className="text-blue-900">{displayInitialPoint?.name}</p>
+                <p className="text-blue-900">
+                  {displayInitialPoint?.name || "—"}
+                </p>
                 <p className="text-blue-700 text-sm">
-                  {displayInitialPoint?.city} / {displayInitialPoint?.state}
+                  {displayInitialPoint?.city || "—"} /{" "}
+                  {displayInitialPoint?.state || "—"}
                 </p>
               </div>
             </div>
           </div>
         </Card>
-
-        {/* Mapa */}
 
         {/* Lista de Pontos */}
         <Card className="p-6 bg-white shadow-sm border-slate-200">
@@ -258,7 +232,6 @@ export function SchemeDetailPage({ schemeId, onBack }: SchemeDetailPageProps) {
                 const isFirstButNotInitial =
                   isFirst && index !== safeInitialIndex;
 
-                // 👉 se for o primeiro ponto e NÃO for o inicial, usa o card especial
                 if (isFirstButNotInitial) {
                   return (
                     <DetailFirstPointCard
@@ -269,7 +242,6 @@ export function SchemeDetailPage({ schemeId, onBack }: SchemeDetailPageProps) {
                   );
                 }
 
-                // demais pontos (inclusive o inicial) usam o card completo
                 return (
                   <DetailPointCard key={point.id} point={point} index={index} />
                 );
@@ -281,8 +253,7 @@ export function SchemeDetailPage({ schemeId, onBack }: SchemeDetailPageProps) {
             )}
           </div>
         </Card>
-        {/* Resumo */}
-        {/* Aqui você ainda pode usar o linhaMeta no DetailSummary / RouteSummary */}
+
         <DetailSummary
           scheme={{ ...scheme, routePoints }}
           linhaMeta={linhaMeta}
@@ -292,7 +263,6 @@ export function SchemeDetailPage({ schemeId, onBack }: SchemeDetailPageProps) {
   );
 }
 
-// 🆕 Helper só pra estilizar o badge de situação
 function getSituacaoClasses(status: string) {
   const normalized = status.toLowerCase();
 

@@ -176,85 +176,13 @@ export function createSchemeHandlers({
   const handleSetInitialPoint = (pointId: string, tripStartTime: string) => {
     if (!tripStartTime) return;
 
-    const toMinutes = (time?: string | null): number | null => {
-      if (!time) return null;
-      const [h, m] = time.split(":").map(Number);
-      if (Number.isNaN(h) || Number.isNaN(m)) return null;
-      return h * 60 + m;
-    };
-
-    const toTimeString = (mins: number): string => {
-      const total = ((mins % (24 * 60)) + 24 * 60) % (24 * 60);
-      const h = Math.floor(total / 60);
-      const m = total % 60;
-      return `${h.toString().padStart(2, "0")}:${m
-        .toString()
-        .padStart(2, "0")}`;
-    };
-
     setRoutePoints((prev) => {
       if (!prev.length) return prev;
 
-      // marca qual é o inicial
       const points = prev.map((p) => ({
         ...p,
         isInitial: p.id === pointId,
       }));
-
-      const initialIndex = points.findIndex((p) => p.id === pointId);
-      if (initialIndex === -1) return prev;
-
-      const startMinutes = toMinutes(tripStartTime);
-      if (startMinutes === null) return prev;
-
-      const initialPoint = points[initialIndex];
-
-      // saída do inicial = Horário da Viagem
-      initialPoint.departureTime = tripStartTime;
-
-      // chegada do inicial = saída - tempo de parada dele
-      const stopInitial = initialPoint.stopTimeMin ?? 0;
-      const initialArrivalMin = startMinutes - stopInitial;
-      initialPoint.arrivalTime =
-        initialArrivalMin >= 0 ? toTimeString(initialArrivalMin) : "";
-
-      // === PRA FRENTE
-      for (let i = initialIndex + 1; i < points.length; i++) {
-        const current = points[i];
-        const prevPoint = points[i - 1];
-
-        const prevDepartureMin = toMinutes(prevPoint.departureTime);
-        if (prevDepartureMin === null) break;
-
-        const driveTimeMin = current.driveTimeMin ?? 0;
-        const stopTimeCurrent = current.stopTimeMin ?? 0;
-
-        const arrivalMin = prevDepartureMin + driveTimeMin;
-        const departureMin = arrivalMin + stopTimeCurrent;
-
-        current.arrivalTime = toTimeString(arrivalMin);
-        current.departureTime = toTimeString(departureMin);
-      }
-
-      // === PRA TRÁS
-      for (let i = initialIndex - 1; i >= 0; i--) {
-        const current = points[i];
-        const nextPoint = points[i + 1];
-
-        const departureNextMin = toMinutes(nextPoint.departureTime);
-        if (departureNextMin === null) break;
-
-        const stopTimeNext = nextPoint.stopTimeMin ?? 0;
-        const driveTimeMin = nextPoint.driveTimeMin ?? 0;
-        const stopTimeCurrent = current.stopTimeMin ?? 0;
-
-        const arrivalNextMin = departureNextMin - stopTimeNext;
-        const departureCurrentMin = arrivalNextMin - driveTimeMin;
-        const arrivalCurrentMin = departureCurrentMin - stopTimeCurrent;
-
-        current.departureTime = toTimeString(departureCurrentMin);
-        current.arrivalTime = toTimeString(arrivalCurrentMin);
-      }
 
       return recalcAllRoutePoints(points);
     });
@@ -377,7 +305,6 @@ export function createSchemeHandlers({
       isFreeStop: !!pointInput.isFreeStop,
       isInitial: false,
     };
-
     setRoutePoints((prev) => {
       const updated = [...prev, newPoint];
       return recalcAllRoutePoints(updated);
@@ -388,42 +315,16 @@ export function createSchemeHandlers({
   // 3) ATUALIZAR UM PONTO EXISTENTE
   // =====================================
   const handleUpdatePoint = (id: string, updates: Partial<RoutePoint>) => {
-    setRoutePoints((prevPoints) => {
-      const pointIndex = prevPoints.findIndex((p) => p.id === id);
-      if (pointIndex === -1) return prevPoints;
+    setRoutePoints((prev: RoutePoint[]): RoutePoint[] => {
+      const index = prev.findIndex((p: RoutePoint) => p.id === id);
+      if (index === -1) return prev;
 
-      const newPoints = [...prevPoints];
-      const updatedPoint: RoutePoint = {
-        ...newPoints[pointIndex],
+      const newPoints: RoutePoint[] = [...prev];
+
+      newPoints[index] = {
+        ...newPoints[index],
         ...updates,
       };
-
-      // só recalcula saída se não for o ponto inicial
-      if (updates.stopTimeMin !== undefined && pointIndex > 0) {
-        updatedPoint.departureTime = addMinutesToTime(
-          updatedPoint.arrivalTime,
-          updatedPoint.stopTimeMin
-        );
-      }
-
-      newPoints[pointIndex] = updatedPoint;
-
-      // recalcula os pontos seguintes
-      for (let i = pointIndex + 1; i < newPoints.length; i++) {
-        const prevPoint = newPoints[i - 1];
-        const current = { ...newPoints[i] };
-
-        current.arrivalTime = addMinutesToTime(
-          prevPoint.departureTime,
-          current.driveTimeMin
-        );
-        current.departureTime = addMinutesToTime(
-          current.arrivalTime,
-          current.stopTimeMin
-        );
-
-        newPoints[i] = current;
-      }
 
       return recalcAllRoutePoints(newPoints);
     });
@@ -661,16 +562,22 @@ function recalcTimesFromInitial(
   const startMinutes = toMinutes(tripStartTime);
   if (startMinutes === null) return result;
 
+  // =========================================================
+  // REGRA: tripStartTime (tripTime) = SAÍDA do ponto inicial
+  // - Não empurra saída pelo stopTimeMin do inicial.
+  // - Chegada do inicial = tripStartTime (para evitar confusão visual).
+  // =========================================================
   const initialPoint = result[initialIndex];
-  initialPoint.departureTime =
-    tripStartTime || initialPoint.departureTime || "00:00";
+  initialPoint.departureTime = tripStartTime;
 
   const stopInitial = initialPoint.stopTimeMin ?? 0;
-  const initialArrivalMin = startMinutes - stopInitial;
-  initialPoint.arrivalTime =
-    initialArrivalMin >= 0 ? toTimeString(initialArrivalMin) : "";
+  const startMin = toMinutes(tripStartTime)!;
 
-  // pra frente
+  initialPoint.arrivalTime = toTimeString(startMin - stopInitial);
+
+  // ==========================
+  // PRA FRENTE
+  // ==========================
   for (let i = initialIndex + 1; i < result.length; i++) {
     const current = result[i];
     const prevPoint = result[i - 1];
@@ -688,23 +595,31 @@ function recalcTimesFromInitial(
     current.departureTime = toTimeString(departureMin);
   }
 
-  // pra trás
+  // ==========================
+  // PRA TRÁS (pré-viagem)
+  // Aqui faz sentido usar stopTimeMin do PRÓPRIO ponto pré-inicial
+  // para chegar "antes" e sair "depois" (se você quiser).
+  //
+  // Se você preferir que pré-viagem só tenha departure,
+  // você pode setar arrivalTime = "" nesses pontos.
+  // ==========================
   for (let i = initialIndex - 1; i >= 0; i--) {
     const current = result[i];
     const nextPoint = result[i + 1];
 
-    const departureNextMin = toMinutes(nextPoint.departureTime);
-    if (departureNextMin === null) break;
+    const nextDepartureMin = toMinutes(nextPoint.departureTime);
+    if (nextDepartureMin === null) break;
 
-    const stopTimeNext = nextPoint.stopTimeMin ?? 0;
-    const driveTimeMin = nextPoint.driveTimeMin ?? 0;
-    const stopTimeCurrent = current.stopTimeMin ?? 0;
+    const driveToNextMin = nextPoint.driveTimeMin ?? 0;
+    const stopNext = nextPoint.stopTimeMin ?? 0;
+    const stopCurrent = current.stopTimeMin ?? 0;
 
-    const arrivalNextMin = departureNextMin - stopTimeNext;
-    const departureCurrentMin = arrivalNextMin - driveTimeMin;
-    const arrivalCurrentMin = departureCurrentMin - stopTimeCurrent;
-
+    //  Saída do ponto anterior (igual planilha)
+    const departureCurrentMin = nextDepartureMin - stopNext - driveToNextMin;
     current.departureTime = toTimeString(departureCurrentMin);
+
+    //  Chegada = Saída - Stop (igual planilha)
+    const arrivalCurrentMin = departureCurrentMin - stopCurrent;
     current.arrivalTime = toTimeString(arrivalCurrentMin);
   }
 

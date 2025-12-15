@@ -161,8 +161,8 @@ export function mapToOperationalScheme(
 
   // 👉 Aqui estou considerando que trip_time é a HORA DE CHEGADA do ponto inicial.
   // Se quiser que seja hora de SAÍDA, troca a lógica comentada logo abaixo.
-  arrivalArr[initialIndex] = startMinutes;
-  departureArr[initialIndex] = startMinutes + stopArr[initialIndex];
+  departureArr[initialIndex] = startMinutes;
+  arrivalArr[initialIndex] = startMinutes - stopArr[initialIndex];
 
   /*
   // alternativa: tripTime = HORA DE SAÍDA do ponto inicial
