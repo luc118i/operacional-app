@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 
-import { ArrowLeft, Plus, Save, Map, X } from "lucide-react";
+import { ArrowLeft, Plus, Save, Map, X, RefreshCcw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -15,12 +15,21 @@ import type { RoutePoint } from "@/types/scheme";
 import { createSchemeHandlers, type Line } from "./createSchemeHandlers";
 import { InitialRoutePointCard } from "@/components/scheme/InitialRoutePointCard";
 
-import { computeANTTAlertsForRoute } from "@/lib/anttRules";
+import {
+  buildRulesOverviewFromIssues,
+  type RulesSourceUsed,
+} from "@/lib/rules";
+
 import { useSaveScheme } from "@/hooks/useSaveScheme";
 
 import { mapToOperationalScheme } from "@/lib/mapToOperationalScheme";
 import type { OperationalScheme } from "@/types/scheme";
 import { API_URL } from "@/services/api";
+import {
+  normalizeFromBackendEvaluation,
+  mapIssuesToPointAlerts,
+  type BackendEvaluationResponse,
+} from "@/lib/rules";
 
 interface CreateSchemePageProps {
   onBack: () => void;
@@ -32,10 +41,17 @@ import type {
 } from "@/services/schemes/saveScheme";
 
 import { findSchemeByKey } from "@/services/schemes/saveScheme";
+import { ViolationActionDivider } from "@/components/scheme/ViolationActionDivider";
 
 type Direction = "ida" | "volta";
 
 type ModalMode = "add" | "editInitial" | "insertAfter" | null;
+
+type ModalPreset = {
+  pointType?: string; // "PA" | "TMJ" etc
+  functions?: string[]; // ["DESCANSO"] | ["APOIO"] | ["TROCA_MOTORISTA"]
+  justification?: string;
+};
 
 export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
   const [lineCode, setLineCode] = useState("");
@@ -52,6 +68,7 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
   const [isLoadingExisting, setIsLoadingExisting] = useState(false);
   const lookupTimeoutRef = useRef<number | null>(null);
 
+  const [modalPreset, setModalPreset] = useState<ModalPreset | null>(null);
   const { isSaving, error, save } = useSaveScheme();
   const {
     handleLineCodeChange,
@@ -62,6 +79,7 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
     handleMovePointUp,
     handleMovePointDown,
     handleInsertPointAfter,
+    handleRefreshDistances,
   } = createSchemeHandlers({
     routePoints,
     setRoutePoints,
@@ -71,6 +89,16 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
     setLineCode,
     setIsModalOpen,
   });
+  const [backendEvaluation, setBackendEvaluation] =
+    useState<BackendEvaluationResponse | null>(null);
+
+  const evaluationByOrder = useMemo(() => {
+    const map: Record<number, BackendEvaluationResponse["avaliacao"][number]> =
+      {};
+    const arr = backendEvaluation?.avaliacao ?? [];
+    for (const ev of arr) map[ev.ordem] = ev;
+    return map;
+  }, [backendEvaluation]);
 
   // ✅ regras de exibição
   const canShowLineDetails = !!selectedLine && !!direction && !!tripTime;
@@ -109,16 +137,49 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
   const finalState =
     direction === "ida" ? selectedLine?.ufDestino : selectedLine?.ufOrigem;
 
-  const anttAlertsByPointId = useMemo(
-    () => computeANTTAlertsForRoute(routePoints),
-    [routePoints]
-  );
+  const anttAlertsByPointId = useMemo(() => {
+    if (!backendEvaluation) return {};
+    const issues = normalizeFromBackendEvaluation(
+      backendEvaluation,
+      routePoints
+    );
+    return mapIssuesToPointAlerts(issues);
+  }, [backendEvaluation, routePoints]);
+
+  const {
+    issues: ruleIssues,
+    overview: rulesOverview,
+    sourceUsed,
+  } = useMemo(() => {
+    if (!editingSchemeId || !backendEvaluation) {
+      const emptyIssues: any[] = [];
+      const source: RulesSourceUsed = "none";
+      return {
+        issues: emptyIssues,
+        overview: buildRulesOverviewFromIssues(emptyIssues, source),
+        sourceUsed: source,
+      };
+    }
+
+    const issues = normalizeFromBackendEvaluation(
+      backendEvaluation,
+      routePoints
+    );
+    const source: RulesSourceUsed = issues.length ? "backend" : "none";
+
+    return {
+      issues,
+      overview: buildRulesOverviewFromIssues(issues, source),
+      sourceUsed: source,
+    };
+  }, [editingSchemeId, backendEvaluation, routePoints]);
 
   // 🔍 Busca orgânica por esquema existente (linha + sentido + horário)
   useEffect(() => {
     // Se ainda não tem os três campos preenchidos, não busca
     if (!lineCode || !direction || !tripTime) {
       setEditingSchemeId(null);
+      setBackendEvaluation(null);
       setIsLoadingExisting(false);
       // opcional: se quiser limpar a tela quando mudar a configuração:
       // setRoutePoints([]);
@@ -145,6 +206,7 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
         if (!existing) {
           // Não existe -> novo esquema
           setEditingSchemeId(null);
+          setBackendEvaluation(null);
           // Se quiser, também pode limpar os pontos aqui:
           // setRoutePoints([]);
           return;
@@ -155,6 +217,13 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
 
         // 3) Carrega o esquema completo + pontos
         const operational = await loadOperationalSchemeById(existing.id);
+
+        // 3.1) Carrega regras (backend) do esquema
+        const evaluation = await loadRulesEvaluationBySchemeId(existing.id);
+        setBackendEvaluation(evaluation);
+
+        // 4) Joga os pontos do esquema carregado na tela de criação/edição
+        setRoutePoints(operational.routePoints ?? []);
 
         // 4) Joga os pontos do esquema carregado na tela de criação/edição
         setRoutePoints(operational.routePoints ?? []);
@@ -295,6 +364,59 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
     }
   };
 
+  async function loadRulesEvaluationBySchemeId(
+    id: string
+  ): Promise<BackendEvaluationResponse | null> {
+    try {
+      const url = `${API_URL}/scheme-points/schemes/${id}/points/evaluation`;
+      const res = await fetch(url);
+
+      if (!res.ok) return null;
+
+      return (await res.json()) as BackendEvaluationResponse;
+    } catch (err) {
+      console.error("[CreateSchemePage] erro ao carregar evaluation:", err);
+      return null;
+    }
+  }
+
+  function getBestActionableResult(
+    ev?: BackendEvaluationResponse["avaliacao"][number]
+  ) {
+    if (!ev?.results?.length) return null;
+
+    // prioridade: CRITICAL/BLOCKING > WARNING > resto
+    const withRemediation = ev.results.filter(
+      (r: any) => r?.violation?.remediation
+    );
+
+    if (!withRemediation.length) return null;
+
+    // se tiver severity, prioriza. senão pega o primeiro.
+    withRemediation.sort((a: any, b: any) => {
+      const rank = (s?: string) =>
+        s === "BLOCKING" ? 3 : s === "WARNING" ? 2 : s === "INFO" ? 1 : 0;
+      return rank(b?.violation?.severity) - rank(a?.violation?.severity);
+    });
+
+    return withRemediation[0];
+  }
+
+  function presetFromExpected(expected?: {
+    function?: string;
+    point_type?: string;
+  }) {
+    const fn = expected?.function;
+
+    if (fn === "DESCANSO") return { pointType: "PA", functions: ["DESCANSO"] };
+    if (fn === "APOIO")
+      return { pointType: "PA", functions: ["DESCANSO", "APOIO"] }; // ou só ["APOIO"] se preferir
+    if (fn === "TROCA_MOTORISTA")
+      return { pointType: "TMJ", functions: ["TROCA_MOTORISTA"] };
+
+    return { pointType: "PA", functions: [] };
+  }
+
   async function loadOperationalSchemeById(
     id: string
   ): Promise<OperationalScheme> {
@@ -333,6 +455,8 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
 
     return operational;
   }
+
+  const [isRefreshingDistances, setIsRefreshingDistances] = useState(false);
 
   return (
     <div className="min-h-screen">
@@ -523,17 +647,49 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
           <Card className="p-6 bg-white shadow-sm border-slate-200">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-slate-900">Pontos da Rota</h2>
-              <Button
-                onClick={() => {
-                  setModalMode("add");
-                  setIsModalOpen(true);
-                }}
-                className="bg-blue-600 hover:bg-blue-700"
-                disabled={isLoadingExisting}
-              >
-                <Plus className="w-4 h-4 mr-2" />
-                Adicionar Ponto
-              </Button>
+
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={async () => {
+                    setIsRefreshingDistances(true);
+                    try {
+                      await handleRefreshDistances();
+                    } finally {
+                      setIsRefreshingDistances(false);
+                    }
+                  }}
+                  disabled={
+                    isLoadingExisting ||
+                    isRefreshingDistances ||
+                    routePoints.length < 2
+                  }
+                  className="border-slate-300"
+                  title="Recalcula distâncias e tempos de deslocamento usando os trechos salvos (road_segments) antes de chamar API externa."
+                >
+                  <RefreshCcw
+                    className={`w-4 h-4 mr-2 ${
+                      isRefreshingDistances ? "animate-spin" : ""
+                    }`}
+                  />
+                  {isRefreshingDistances
+                    ? "Atualizando..."
+                    : "Atualizar distâncias"}
+                </Button>
+
+                <Button
+                  onClick={() => {
+                    setModalMode("add");
+                    setIsModalOpen(true);
+                  }}
+                  className="bg-blue-600 hover:bg-blue-700"
+                  disabled={isLoadingExisting || isRefreshingDistances}
+                >
+                  <Plus className="w-4 h-4 mr-2" />
+                  Adicionar Ponto
+                </Button>
+              </div>
             </div>
 
             {routePoints.length === 0 ? (
@@ -559,34 +715,66 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
               )
             ) : (
               <div className="space-y-4">
-                {routePoints.map((point, index) =>
-                  index === 0 ? (
-                    <InitialRoutePointCard
-                      key={point.id}
-                      point={point}
-                      index={index}
-                      onUpdate={handleUpdatePoint}
-                      onDelete={handleDeletePoint}
-                    />
-                  ) : (
-                    <RoutePointCard
-                      key={point.id}
-                      point={point}
-                      index={index}
-                      previousPoint={routePoints[index - 1]}
-                      alerts={anttAlertsByPointId[point.id] ?? []}
-                      onUpdate={handleUpdatePoint}
-                      onDelete={handleDeletePoint}
-                      onMoveUp={handleMovePointUp}
-                      onMoveDown={handleMovePointDown}
-                      onInsertAfter={(id) => {
-                        setModalMode("insertAfter");
-                        setInsertAfterPointId(id);
-                        setIsModalOpen(true);
-                      }}
-                    />
-                  )
-                )}
+                {routePoints.map((point, index) => {
+                  const ordem = index + 1; // seu UI usa index+1
+                  const ev = evaluationByOrder[ordem];
+                  const best = getBestActionableResult(ev);
+
+                  const shouldShowDivider = index > 0 && !!best;
+
+                  return (
+                    <div key={point.id} className="space-y-2">
+                      {shouldShowDivider && (
+                        <ViolationActionDivider
+                          title={best.message} // pode ser mais curto se preferir
+                          suggestion={best?.violation?.remediation?.suggestion}
+                          expectedFunction={best?.violation?.expected?.function}
+                          onAdd={() => {
+                            // insere “entre” cards: após o anterior, antes do atual
+                            const prevId = String(routePoints[index - 1].id);
+
+                            setModalMode("insertAfter");
+                            setInsertAfterPointId(prevId);
+
+                            // preset guiado pelo backend
+                            const preset = presetFromExpected(
+                              best?.violation?.expected
+                            );
+                            setModalPreset(preset);
+
+                            setIsModalOpen(true);
+                          }}
+                        />
+                      )}
+
+                      {index === 0 ? (
+                        <InitialRoutePointCard
+                          point={point}
+                          index={index}
+                          onUpdate={handleUpdatePoint}
+                          onDelete={handleDeletePoint}
+                        />
+                      ) : (
+                        <RoutePointCard
+                          point={point}
+                          index={index}
+                          previousPoint={routePoints[index - 1]}
+                          alerts={anttAlertsByPointId[point.id] ?? []}
+                          onUpdate={handleUpdatePoint}
+                          onDelete={handleDeletePoint}
+                          onMoveUp={handleMovePointUp}
+                          onMoveDown={handleMovePointDown}
+                          onInsertAfter={(id) => {
+                            setModalMode("insertAfter");
+                            setInsertAfterPointId(id);
+                            setModalPreset(null); // aqui é manual, sem preset
+                            setIsModalOpen(true);
+                          }}
+                        />
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </Card>
@@ -594,7 +782,13 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
 
         {/* Resumo Final */}
         {routePoints.length > 0 && (
-          <RouteSummary routePoints={routePoints} tripStartTime={tripTime} />
+          <RouteSummary
+            routePoints={routePoints}
+            tripStartTime={tripTime}
+            ruleIssues={ruleIssues}
+            rulesOverview={rulesOverview}
+            rulesSourceUsed={sourceUsed}
+          />
         )}
 
         {/* Ações Finais */}
@@ -628,10 +822,12 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
       {/* Modal de Adicionar Ponto */}
       <AddPointModal
         isOpen={isModalOpen}
+        preset={modalPreset}
         onClose={() => {
           setIsModalOpen(false);
           setModalMode(null);
           setInsertAfterPointId(null);
+          setModalPreset(null);
         }}
         onAdd={handleConfirmPointFromModal}
         onSetInitial={handleAddPointAsInitial}

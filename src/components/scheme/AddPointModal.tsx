@@ -1,15 +1,22 @@
+// src/components/.../AddPointModal.tsx
 import { Search, MapPin, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Modal } from "@/components/ui/modal";
 
-import type { RoutePoint } from "@/types/scheme";
+import type { RoutePoint, PointFunction } from "@/types/scheme";
 import {
   useLocationSearch,
   type LocationOption,
 } from "@/hooks/useLocationSearch";
+
+export type ModalPreset = {
+  pointType?: string; // "PA" | "TMJ" etc
+  functions?: string[]; // ["DESCANSO"] | ["APOIO"] | ["TROCA_MOTORISTA"]
+  justification?: string;
+};
 
 interface AddPointModalProps {
   isOpen: boolean;
@@ -18,6 +25,8 @@ interface AddPointModalProps {
   onSetInitial: (point: any) => void;
   canSetInitial: boolean;
   initialPoint: RoutePoint | null;
+
+  preset?: ModalPreset | null;
 }
 
 const pointTypes = [
@@ -29,13 +38,7 @@ const pointTypes = [
   { value: "PL", label: "PL - Ponto Livre" },
 ];
 
-type ANTTFunctionKey =
-  | "DESCANSO"
-  | "APOIO"
-  | "TROCA_MOTORISTA"
-  | "EMBARQUE"
-  | "DESEMBARQUE"
-  | "PARADA_LIVRE";
+type ANTTFunctionKey = PointFunction;
 
 const ANTT_FUNCTIONS: {
   id: ANTTFunctionKey;
@@ -86,6 +89,40 @@ const localTimeOptions = [
   { value: 120, label: "02:00" },
 ];
 
+function uniq<T>(arr: T[]): T[] {
+  return Array.from(new Set(arr));
+}
+
+function deriveFlagsFromFunctions(fns: PointFunction[]) {
+  return {
+    isRestStop: fns.includes("DESCANSO"),
+    isSupportPoint: fns.includes("APOIO"),
+    isDriverChange: fns.includes("TROCA_MOTORISTA"),
+    isBoardingPoint: fns.includes("EMBARQUE"),
+    isDropoffPoint: fns.includes("DESEMBARQUE"),
+    isFreeStop: fns.includes("PARADA_LIVRE"),
+  };
+}
+
+function defaultFunctionsByPointType(pointType: string): ANTTFunctionKey[] {
+  switch (pointType) {
+    case "PP":
+      return ["DESCANSO"];
+    case "PA":
+      return ["DESCANSO", "APOIO"];
+    case "TMJ":
+      return ["DESCANSO", "TROCA_MOTORISTA"];
+    case "PE":
+      return ["EMBARQUE"];
+    case "PD":
+      return ["DESEMBARQUE"];
+    case "PL":
+      return ["PARADA_LIVRE"];
+    default:
+      return [];
+  }
+}
+
 export function AddPointModal({
   isOpen,
   onClose,
@@ -93,6 +130,7 @@ export function AddPointModal({
   onSetInitial,
   canSetInitial,
   initialPoint,
+  preset,
 }: AddPointModalProps) {
   const {
     searchTerm,
@@ -111,106 +149,97 @@ export function AddPointModal({
   const [avgSpeed, setAvgSpeed] = useState(80);
   const [justification, setJustification] = useState("");
 
-  const [isRestStop, setIsRestStop] = useState(false);
-  const [isSupportPoint, setIsSupportPoint] = useState(false);
-  const [isDriverChange, setIsDriverChange] = useState(false);
-  const [isBoardingPoint, setIsBoardingPoint] = useState(false);
-  const [isDropoffPoint, setIsDropoffPoint] = useState(false);
-  const [isFreeStop, setIsFreeStop] = useState(false);
+  const [suppressTypeDefaultsOnce, setSuppressTypeDefaultsOnce] =
+    useState(false);
 
-  const [anttFunctions, setAnttFunctions] = useState<ANTTFunctionKey[]>([]);
+  // ✅ contrato público: única fonte de verdade para funções ANTT
+  const [functions, setFunctions] = useState<ANTTFunctionKey[]>(() =>
+    defaultFunctionsByPointType("PP")
+  );
 
-  // Sugestões padrão de funções ANTT conforme o tipo principal
+  // Quando muda o tipo, sugerimos defaults (e sobrescrevemos a seleção atual).
+  // Se você quiser "manter marcações" quando muda tipo, aí a regra muda — mas por ora está consistente com seu fluxo.
   useEffect(() => {
-    setIsRestStop(false);
-    setIsSupportPoint(false);
-    setIsDriverChange(false);
-    setIsBoardingPoint(false);
-    setIsDropoffPoint(false);
-    setIsFreeStop(false);
-
-    const defaults: ANTTFunctionKey[] = [];
-
-    switch (pointType) {
-      case "PP":
-        setIsRestStop(true);
-        defaults.push("DESCANSO");
-        break;
-      case "PA":
-        setIsRestStop(true);
-        setIsSupportPoint(true);
-        defaults.push("DESCANSO", "APOIO");
-        break;
-      case "TMJ":
-        setIsRestStop(true);
-        setIsDriverChange(true);
-        defaults.push("DESCANSO", "TROCA_MOTORISTA");
-        break;
-      case "PE":
-        setIsBoardingPoint(true);
-        defaults.push("EMBARQUE");
-        break;
-      case "PD":
-        setIsDropoffPoint(true);
-        defaults.push("DESEMBARQUE");
-        break;
-      case "PL":
-        setIsFreeStop(true);
-        defaults.push("PARADA_LIVRE");
-        break;
-      default:
-        break;
+    // evita que o preset (que seta pointType) seja sobrescrito pelo default
+    if (suppressTypeDefaultsOnce) {
+      setSuppressTypeDefaultsOnce(false);
+      return;
     }
 
-    setAnttFunctions(defaults);
-  }, [pointType]);
+    setFunctions(defaultFunctionsByPointType(pointType));
+  }, [pointType, suppressTypeDefaultsOnce]);
+
+  // Flags derivadas (compat/UI). Não viram state: evitamos dupla fonte.
+  const flags = useMemo(() => {
+    return deriveFlagsFromFunctions(functions);
+  }, [functions]);
 
   const resetForm = () => {
     setSearchTerm("");
     clearResults();
+
     setPointType("PP");
     setLocalTime(20);
     setAvgSpeed(80);
     setJustification("");
-    setAnttFunctions([]);
 
-    setIsRestStop(false);
-    setIsSupportPoint(false);
-    setIsDriverChange(false);
-    setIsBoardingPoint(false);
-    setIsDropoffPoint(false);
-    setIsFreeStop(false);
+    setFunctions(defaultFunctionsByPointType("PP"));
   };
+
+  useEffect(() => {
+    if (!isOpen) return;
+    if (!preset) return;
+
+    // 1) trava o auto-default UMA vez (porque vamos setar pointType via preset)
+    setSuppressTypeDefaultsOnce(true);
+
+    // 2) aplica presets
+    if (preset.pointType) setPointType(preset.pointType);
+
+    if (preset.functions?.length) {
+      // normaliza para o seu tipo (PointFunction) e remove duplicados
+      const normalized = uniq(preset.functions as ANTTFunctionKey[]);
+      setFunctions(normalized);
+    }
+
+    if (preset.justification !== undefined) {
+      setJustification(preset.justification);
+    }
+  }, [isOpen, preset]);
 
   const handleClose = () => {
     resetForm();
     onClose();
   };
 
-  const buildPayloadFromLocation = (location: LocationOption) => ({
-    // ⚠️ NÃO MEXEMOS NO SHAPE DO PAYLOAD
-    location: {
-      id: String(location.id),
-      name: String(location.name ?? ""),
-      city: String(location.city ?? ""),
-      state: String(location.state ?? ""),
-      shortName: String(location.name ?? ""),
-      kind: "OUTRO",
-      lat: Number(location.lat ?? 0),
-      lng: Number(location.lng ?? 0),
-    },
-    type: pointType,
-    stopTimeMin: localTime,
-    avgSpeed: Number(avgSpeed),
-    justification,
-    isRestStop,
-    isSupportPoint,
-    isDriverChange,
-    isBoardingPoint,
-    isDropoffPoint,
-    isFreeStop,
-    anttFunctions: [...anttFunctions],
-  });
+  const buildPayloadFromLocation = (location: LocationOption) => {
+    const normalizedFunctions = uniq(functions);
+    const derived = deriveFlagsFromFunctions(normalizedFunctions);
+
+    return {
+      location: {
+        id: String(location.id),
+        name: String(location.name ?? ""),
+        city: String(location.city ?? ""),
+        state: String(location.state ?? ""),
+        shortName: String(location.shortName ?? location.name ?? ""),
+        kind: String((location as any).kind ?? "OUTRO"),
+        lat: Number(location.lat ?? 0),
+        lng: Number(location.lng ?? 0),
+      },
+
+      type: pointType,
+      stopTimeMin: localTime,
+      avgSpeed: Number(avgSpeed),
+      justification,
+
+      // ✅ contrato público
+      functions: normalizedFunctions,
+
+      // ✅ compat enquanto o resto do front ainda usa flags
+      ...derived,
+    };
+  };
 
   const handleAdd = () => {
     if (!selectedLocation) return;
@@ -226,10 +255,13 @@ export function AddPointModal({
     handleClose();
   };
 
-  const toggleAnttFunction = (id: ANTTFunctionKey) => {
-    setAnttFunctions((prev) =>
-      prev.includes(id) ? prev.filter((f) => f !== id) : [...prev, id]
-    );
+  const toggleFunction = (id: ANTTFunctionKey) => {
+    setFunctions((prev) => {
+      const next = prev.includes(id)
+        ? prev.filter((f) => f !== id)
+        : [...prev, id];
+      return uniq(next);
+    });
   };
 
   return (
@@ -455,8 +487,8 @@ export function AddPointModal({
                       <input
                         type="checkbox"
                         className="mt-0.5"
-                        checked={anttFunctions.includes(fn.id)}
-                        onChange={() => toggleAnttFunction(fn.id)}
+                        checked={functions.includes(fn.id)}
+                        onChange={() => toggleFunction(fn.id)}
                       />
                       <div>
                         <div className="font-medium text-slate-900">
@@ -481,6 +513,9 @@ export function AddPointModal({
                 placeholder="Descreva a justificativa para este ponto..."
               />
             </div>
+
+            {/* (Opcional) Preview das flags derivadas para debug/UX */}
+            {/* <pre className="text-xs text-slate-500">{JSON.stringify(flags, null, 2)}</pre> */}
           </div>
         )}
 

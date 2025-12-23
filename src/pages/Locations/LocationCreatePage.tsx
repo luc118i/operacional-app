@@ -1,11 +1,6 @@
 import { useState } from "react";
 import { MapPin } from "lucide-react";
-import * as OpenLocationCodeModule from "open-location-code";
-
-const OpenLocationCodeClass: any =
-  (OpenLocationCodeModule as any).OpenLocationCode ?? OpenLocationCodeModule;
-
-const olc: any = new OpenLocationCodeClass();
+import * as OLCModule from "open-location-code";
 
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -20,7 +15,15 @@ import {
   updateLocation,
 } from "@/services/locations";
 
-const UF_OPTIONS = [
+const OpenLocationCodeCtor: any =
+  (OLCModule as any).OpenLocationCode ??
+  (OLCModule as any).default?.OpenLocationCode ??
+  (OLCModule as any).default ??
+  (OLCModule as any);
+
+const olc: any = new OpenLocationCodeCtor();
+
+const BR_UFS = [
   "AC",
   "AL",
   "AM",
@@ -48,15 +51,53 @@ const UF_OPTIONS = [
   "SE",
   "SP",
   "TO",
-];
+] as const;
 
-const UF_REF_COORDS: Record<string, { lat: number; lng: number }> = {
-  DF: { lat: -15.7801, lng: -47.9292 },
-  GO: { lat: -16.6869, lng: -49.2648 },
-  SP: { lat: -23.5505, lng: -46.6333 },
-  RJ: { lat: -22.9068, lng: -43.1729 },
-  MG: { lat: -19.9167, lng: -43.9345 },
-  BA: { lat: -12.9777, lng: -38.5016 },
+type BRUF = (typeof BR_UFS)[number];
+
+const UF_OPTIONS: BRUF[] = [...BR_UFS];
+
+// Extrai a ÚLTIMA UF encontrada no texto (comum aparecer no final: "..., CE")
+function extractUF(raw: string): BRUF | null {
+  const upper = raw.toUpperCase();
+  const matches = upper.match(
+    /\b(AC|AL|AM|AP|BA|CE|DF|ES|GO|MA|MG|MS|MT|PA|PB|PE|PI|PR|RJ|RN|RO|RR|RS|SC|SE|SP|TO)\b/g
+  );
+  if (!matches || matches.length === 0) return null;
+  return matches[matches.length - 1] as BRUF;
+}
+
+// Referência para completar Plus Codes curtos (short codes)
+// Você pode completar as UFs faltantes depois.
+const UF_REF_COORDS: Partial<Record<BRUF, { lat: number; lng: number }>> = {
+  /* =======================
+     CENTRO-OESTE
+     ======================= */
+  DF: { lat: -15.7801, lng: -47.9292 }, // Brasília
+  GO: { lat: -16.6869, lng: -49.2648 }, // Goiânia
+  MT: { lat: -15.6014, lng: -56.0979 }, // Cuiabá
+  MS: { lat: -20.4697, lng: -54.6201 }, // Campo Grande
+
+  /* =======================
+     SUDESTE
+     ======================= */
+  SP: { lat: -23.5505, lng: -46.6333 }, // São Paulo
+  RJ: { lat: -22.9068, lng: -43.1729 }, // Rio de Janeiro
+  MG: { lat: -19.9167, lng: -43.9345 }, // Belo Horizonte
+  ES: { lat: -20.3155, lng: -40.3128 }, // Vitória
+
+  /* =======================
+     NORDESTE
+     ======================= */
+  BA: { lat: -12.9777, lng: -38.5016 }, // Salvador
+  CE: { lat: -3.7319, lng: -38.5267 }, // Fortaleza
+  PE: { lat: -8.0476, lng: -34.877 }, // Recife
+  PB: { lat: -7.1195, lng: -34.845 }, // João Pessoa
+  RN: { lat: -5.7945, lng: -35.211 }, // Natal
+  AL: { lat: -9.6498, lng: -35.7089 }, // Maceió
+  SE: { lat: -10.9472, lng: -37.0731 }, // Aracaju
+  PI: { lat: -5.0919, lng: -42.8034 }, // Teresina
+  MA: { lat: -2.5307, lng: -44.3068 }, // São Luís
 };
 
 const TIPO_OPTIONS: { value: LocationType; label: string }[] = [
@@ -76,7 +117,7 @@ export function LocationCreatePage({ onBack }: LocationCreatePageProps) {
   const [sigla, setSigla] = useState("");
   const [descricao, setDescricao] = useState("");
   const [cidade, setCidade] = useState("");
-  const [uf, setUf] = useState("DF");
+  const [uf, setUf] = useState<BRUF>("DF");
   const [tipo, setTipo] = useState<LocationType>("RODOVIARIA");
 
   const [plusCode, setPlusCode] = useState("");
@@ -112,7 +153,7 @@ export function LocationCreatePage({ onBack }: LocationCreatePageProps) {
     setSigla(location.sigla ?? "");
     setDescricao(location.descricao ?? "");
     setCidade(location.cidade ?? "");
-    setUf(location.uf ?? "DF");
+    setUf((location.uf as BRUF) ?? "DF");
     setTipo(location.tipo as LocationType);
     setLat(typeof location.lat === "number" ? location.lat.toString() : "");
     setLng(typeof location.lng === "number" ? location.lng.toString() : "");
@@ -159,19 +200,49 @@ export function LocationCreatePage({ onBack }: LocationCreatePageProps) {
       return;
     }
 
-    // Pega apenas o código antes de espaço ou vírgula
-    let code = raw.split(/[ ,]/)[0];
+    // Extrai Plus Code do texto (com ou sem cidade/UF)
+    const match = raw
+      .toUpperCase()
+      .match(/[23456789CFGHJMPQRVWX]{2,8}\+[23456789CFGHJMPQRVWX]{2,3}/);
+
+    if (!match) {
+      setError("Não identifiquei um Plus Code no texto informado.");
+      return;
+    }
+
+    let code = match[0];
 
     try {
-      // Referência pela UF
-      const ref = UF_REF_COORDS[uf] ?? UF_REF_COORDS["DF"]; // fallback
+      // Segurança: garante que a lib está ok
+      if (!olc || typeof olc.isShort !== "function") {
+        setError("Biblioteca de Plus Code não carregou corretamente.");
+        return;
+      }
 
-      // Se for short code (como 6448+PX), completar usando recoverNearest()
+      // Tenta detectar UF do texto colado (ex.: ", CE")
+      const ufFromText = extractUF(raw);
+      const ufForRef: BRUF = ufFromText ?? uf;
+
+      // Sincroniza UF automaticamente se detectou no texto
+      if (ufFromText && ufFromText !== uf) {
+        setUf(ufFromText);
+      }
+      console.log("Recovered full code:", code);
+
+      // Se for curto, completa com recoverNearest
       if (olc.isShort(code)) {
+        const ref = UF_REF_COORDS[ufForRef];
+        if (!ref) {
+          setError(
+            "Plus Code curto detectado. Selecione uma UF com referência ou cole o Plus Code completo."
+          );
+          return;
+        }
+
         code = olc.recoverNearest(code, ref.lat, ref.lng);
       }
 
-      // Agora sim validar o código completo
+      // Valida o código (agora deve estar completo)
       if (!olc.isValid(code)) {
         setError("Plus Code inválido. Verifique e tente novamente.");
         return;
@@ -226,10 +297,7 @@ export function LocationCreatePage({ onBack }: LocationCreatePageProps) {
 
       if (isEditMode && editingLocationId) {
         await updateLocation(editingLocationId, payload);
-
         setSuccess("Local atualizado com sucesso.");
-
-        // Limpa tudo e sai do modo edição
         resetForm();
       } else {
         await createLocation(payload);
@@ -331,7 +399,7 @@ export function LocationCreatePage({ onBack }: LocationCreatePageProps) {
               <select
                 id="uf"
                 value={uf}
-                onChange={(e) => setUf(e.target.value)}
+                onChange={(e) => setUf(e.target.value as BRUF)}
                 className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
               >
                 {UF_OPTIONS.map((item) => (

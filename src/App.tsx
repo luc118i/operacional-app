@@ -43,7 +43,7 @@ export interface OperationalScheme {
 
   lineCode: string;
   lineName: string;
-  direction: "Ida" | "Volta";
+  direction: "ida" | "volta";
 
   origin: string;
   originState: string;

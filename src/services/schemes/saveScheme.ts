@@ -48,15 +48,28 @@ function mapRoutePointsToApiPayload(
       ordem,
       location_id: point.location.id,
       tipo: point.type,
+
       distancia_km: point.distanceKm,
       distancia_acumulada_km: point.cumulativeDistanceKm,
       tempo_deslocamento_min: point.driveTimeMin,
       tempo_no_local_min: point.stopTimeMin,
       velocidade_media_kmh: point.avgSpeed ?? null,
+
       is_initial: !!point.isInitial,
       is_final: index === routePoints.length - 1,
+
       estabelecimento: p.establishment ?? null,
       justificativa: point.justification ?? null,
+
+      // ✅ flags operação / ANTT (fonte de verdade no backend)
+      troca_motorista: !!point.isDriverChange,
+      ponto_operacional: false, // (quando existir no front, mapear daqui)
+
+      is_rest_stop: !!point.isRestStop,
+      is_support_point: !!point.isSupportPoint,
+      is_boarding_point: !!point.isBoardingPoint,
+      is_dropoff_point: !!point.isDropoffPoint,
+      is_free_stop: !!point.isFreeStop,
     };
   });
 }

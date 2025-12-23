@@ -1,8 +1,10 @@
 // src/pages/SchemeCreate/createSchemeHandlers.ts
 import type { Dispatch, SetStateAction } from "react";
-import type { RoutePoint } from "@/types/scheme";
+import type { RoutePoint, PointFunction } from "@/types/scheme";
 
 import rawLines from "../../data/lista-de-linhas.json";
+
+export const API_URL = import.meta.env.VITE_API_URL;
 
 // ===============================
 // TIPAGEM DO CSV NORMALIZADA
@@ -41,6 +43,79 @@ const lines: Line[] = (rawLines as RawLine[]).map((l) => ({
   ok: l["OK"],
 }));
 
+function uniq<T>(arr: T[]): T[] {
+  return Array.from(new Set(arr));
+}
+
+function defaultFunctionsByPointType(type: string): PointFunction[] {
+  switch (type) {
+    case "PP":
+      return ["DESCANSO"];
+    case "PA":
+      return ["DESCANSO", "APOIO"];
+    case "TMJ":
+      return ["DESCANSO", "TROCA_MOTORISTA"];
+    case "PE":
+      return ["EMBARQUE"];
+    case "PD":
+      return ["DESEMBARQUE"];
+    case "PL":
+      return ["PARADA_LIVRE"];
+    default:
+      return [];
+  }
+}
+
+function deriveFlagsFromFunctions(fns: PointFunction[]) {
+  return {
+    isRestStop: fns.includes("DESCANSO"),
+    isSupportPoint: fns.includes("APOIO"),
+    isDriverChange: fns.includes("TROCA_MOTORISTA"),
+    isBoardingPoint: fns.includes("EMBARQUE"),
+    isDropoffPoint: fns.includes("DESEMBARQUE"),
+    isFreeStop: fns.includes("PARADA_LIVRE"),
+  };
+}
+
+/**
+ * Normaliza um RoutePoint para manter:
+ * - functions como fonte de verdade
+ * - flags coerentes com functions (compatibilidade)
+ */
+function normalizeRoutePointFunctions(p: RoutePoint): RoutePoint {
+  const raw = (p.functions ?? []) as PointFunction[];
+  const base = raw.length ? raw : defaultFunctionsByPointType(p.type);
+  const functions = uniq(base);
+
+  const flags = deriveFlagsFromFunctions(functions);
+
+  return {
+    ...p,
+    functions,
+    ...flags,
+  };
+}
+
+/**
+ * Quando updates trouxer functions, aplicamos e sincronizamos flags.
+ */
+function applyFunctionsUpdates(
+  current: RoutePoint,
+  updates: Partial<RoutePoint>
+): RoutePoint {
+  const next = { ...current, ...updates } as RoutePoint;
+
+  // se updates trouxe functions explicitamente:
+  if ("functions" in updates) {
+    return normalizeRoutePointFunctions(next);
+  }
+
+  // se não trouxe functions, mantém as functions existentes;
+  // mas se alguém mexeu nas flags (legado), NÃO tentamos re-derivar functions aqui
+  // para evitar “briga” de fonte de verdade.
+  return next;
+}
+
 // Busca por códigos (prefixo ou prefixoSGP)
 function findLineByCode(code: string): Line | undefined {
   const trimmed = code.trim().toUpperCase();
@@ -67,7 +142,7 @@ interface CreateSchemeHandlersParams {
 
   tripTime: string;
   setLineCode: Dispatch<SetStateAction<string>>;
-  setIsModalOpen: (open: boolean) => void;
+  setIsModalOpen: (open: boolean) => void; // (mantido por compatibilidade; se não usar, remova depois)
 }
 
 // ===============================
@@ -94,12 +169,19 @@ export function createSchemeHandlers({
 
   // =====================================
   // HELPER: recalcular tudo após qualquer mudança na lista
+  // - Normaliza functions/flags para TODOS os pontos (fonte de verdade)
+  // - Reordena
+  // - Recalcula distância cumulativa + driveTimeMin
+  // - Recalcula horários baseado no ponto inicial e tripTime
   // =====================================
   const recalcAllRoutePoints = (points: RoutePoint[]): RoutePoint[] => {
     if (!points.length) return points;
 
+    // ✅ ajuste obrigatório: normaliza functions/flags para evitar inconsistências
+    const normalizedInput = points.map(normalizeRoutePointFunctions);
+
     // 1) garante ordem sequencial
-    let newPoints = points.map((p, index) => ({
+    let newPoints = normalizedInput.map((p, index) => ({
       ...p,
       order: index + 1,
     }));
@@ -118,21 +200,16 @@ export function createSchemeHandlers({
       const current = { ...newPoints[i] };
 
       if (i === 0) {
-        // primeiro ponto sempre com distância acumulada = 0
         newPoints[i] = {
           ...current,
           order: 1,
           cumulativeDistanceKm: 0,
-          // distanceKm e driveTimeMin ficam como já estão
         };
         continue;
       }
 
       const prevPoint = newPoints[i - 1];
 
-      // 👉 PRIORIDADE:
-      // 1) usar distanceKm já existente (API ORS, valor salvo no banco etc.)
-      // 2) SE não existir ou for inválido, cair para Haversine como fallback
       let distanceKm = Number(current.distanceKm ?? 0);
       if (!Number.isFinite(distanceKm) || distanceKm <= 0) {
         distanceKm = calculateDistance(
@@ -149,7 +226,6 @@ export function createSchemeHandlers({
       const customSpeed =
         typeof current.avgSpeed === "number" ? current.avgSpeed : undefined;
 
-      // se já existir driveTimeMin válido, preserva; senão calcula
       let driveTimeMin = Number(current.driveTimeMin ?? 0);
       if (!Number.isFinite(driveTimeMin) || driveTimeMin <= 0) {
         driveTimeMin = computeDriveTimeMinutes(distanceKm, customSpeed);
@@ -169,9 +245,9 @@ export function createSchemeHandlers({
     return recalcTimesFromInitial(newPoints, initial.id, tripTime);
   };
 
-  // Define como ponto inicial sem mudar a ordem da lista
-  // Recalcula horários para frente E para trás.
-  // Pressupõe que `tripTime` (HH:mm) já esteja definido no escopo do handler.
+  // =====================================
+  // PONTO INICIAL
+  // =====================================
 
   const handleSetInitialPoint = (pointId: string, tripStartTime: string) => {
     if (!tripStartTime) return;
@@ -193,7 +269,7 @@ export function createSchemeHandlers({
   // =====================================
 
   const handleAddPoint = async (pointInput: any) => {
-    // 1) Se já vier como RoutePoint, continua igual
+    // 1) Se já vier como RoutePoint, continua igual (mas normaliza)
     if (
       pointInput &&
       typeof pointInput === "object" &&
@@ -201,12 +277,14 @@ export function createSchemeHandlers({
       "order" in pointInput &&
       "location" in pointInput
     ) {
-      const asRoutePoint = pointInput as RoutePoint;
-      setRoutePoints((prev) => [...prev, asRoutePoint]);
+      const asRoutePoint = normalizeRoutePointFunctions(
+        pointInput as RoutePoint
+      );
+      setRoutePoints((prev) => recalcAllRoutePoints([...prev, asRoutePoint]));
       return;
     }
 
-    // 2) Payload vindo do modal: { location, type, stopTimeMin, ... }
+    // 2) Payload vindo do modal: { location, type, stopTimeMin, avgSpeed, justification, functions }
     const loc = pointInput.location;
 
     const last = routePoints[routePoints.length - 1];
@@ -216,9 +294,6 @@ export function createSchemeHandlers({
     let cumulativeDistanceKm = last ? last.cumulativeDistanceKm : 0;
     let driveTimeMin = 0;
 
-    // ==============================
-    // DISTÂNCIA (API + fallback)
-    // ==============================
     if (last) {
       try {
         const params = new URLSearchParams({
@@ -227,12 +302,10 @@ export function createSchemeHandlers({
         });
 
         const res = await fetch(
-          `/road-segments/road-distance?${params.toString()}`
+          `${API_URL}/road-segments/road-distance?${params.toString()}`
         );
 
-        if (!res.ok) {
-          throw new Error("Falha ao obter distância pelo traçado");
-        }
+        if (!res.ok) throw new Error("Falha ao obter distância pelo traçado");
 
         const data = await res.json();
         distanceKm = Number(data.distanceKm) || 0;
@@ -260,10 +333,12 @@ export function createSchemeHandlers({
       driveTimeMin = computeDriveTimeMinutes(distanceKm, customSpeed);
     }
 
-    // ==============================
-    // NUNCA DEFINE HORÁRIO AQUI
-    // ==============================
     const stopTimeMin = Number(pointInput.stopTimeMin ?? 5);
+
+    // ✅ ajuste obrigatório: sempre derive functions (não deixe vazio por acidente)
+    const rawFunctions: PointFunction[] = Array.isArray(pointInput.functions)
+      ? pointInput.functions
+      : defaultFunctionsByPointType(String(pointInput.type ?? ""));
 
     const newPoint: RoutePoint = {
       id: String(loc.id),
@@ -275,7 +350,6 @@ export function createSchemeHandlers({
       cumulativeDistanceKm,
       driveTimeMin,
 
-      // sempre em branco – só será preenchido pelo handleSetInitialPoint
       arrivalTime: "",
       departureTime: "",
 
@@ -297,16 +371,19 @@ export function createSchemeHandlers({
 
       justification: pointInput.justification ?? "",
 
-      isRestStop: !!pointInput.isRestStop,
-      isSupportPoint: !!pointInput.isSupportPoint,
-      isDriverChange: !!pointInput.isDriverChange,
-      isBoardingPoint: !!pointInput.isBoardingPoint,
-      isDropoffPoint: !!pointInput.isDropoffPoint,
-      isFreeStop: !!pointInput.isFreeStop,
+      // ✅ CONTRATO NOVO (fonte de verdade)
+      functions: rawFunctions,
+
+      // ✅ NÃO copiamos flags do modal: evita 2 fontes de verdade
+      // flags serão derivadas via normalizeRoutePointFunctions
+
       isInitial: false,
     };
+
+    const normalizedPoint = normalizeRoutePointFunctions(newPoint);
+
     setRoutePoints((prev) => {
-      const updated = [...prev, newPoint];
+      const updated = [...prev, normalizedPoint];
       return recalcAllRoutePoints(updated);
     });
   };
@@ -315,16 +392,15 @@ export function createSchemeHandlers({
   // 3) ATUALIZAR UM PONTO EXISTENTE
   // =====================================
   const handleUpdatePoint = (id: string, updates: Partial<RoutePoint>) => {
-    setRoutePoints((prev: RoutePoint[]): RoutePoint[] => {
-      const index = prev.findIndex((p: RoutePoint) => p.id === id);
+    setRoutePoints((prev) => {
+      const index = prev.findIndex((p) => p.id === id);
       if (index === -1) return prev;
 
-      const newPoints: RoutePoint[] = [...prev];
+      const newPoints = [...prev];
+      const current = newPoints[index];
 
-      newPoints[index] = {
-        ...newPoints[index],
-        ...updates,
-      };
+      const merged = applyFunctionsUpdates(current, updates);
+      newPoints[index] = merged;
 
       return recalcAllRoutePoints(newPoints);
     });
@@ -347,8 +423,8 @@ export function createSchemeHandlers({
   const handleMovePointUp = (id: string) => {
     setRoutePoints((prevPoints) => {
       const index = prevPoints.findIndex((p) => p.id === id);
-      if (index <= 0) return prevPoints; // já é o primeiro ou não achou
-      if (prevPoints[index].isInitial) return prevPoints; // ponto inicial não se mexe
+      if (index <= 0) return prevPoints;
+      if (prevPoints[index].isInitial) return prevPoints;
 
       const newPoints = [...prevPoints];
       const temp = newPoints[index - 1];
@@ -366,7 +442,7 @@ export function createSchemeHandlers({
     setRoutePoints((prevPoints) => {
       const index = prevPoints.findIndex((p) => p.id === id);
       if (index === -1 || index === prevPoints.length - 1) return prevPoints;
-      if (prevPoints[index].isInitial) return prevPoints; // ponto inicial não se mexe
+      if (prevPoints[index].isInitial) return prevPoints;
 
       const newPoints = [...prevPoints];
       const temp = newPoints[index + 1];
@@ -382,27 +458,21 @@ export function createSchemeHandlers({
   // =====================================
   const handleInsertPointAfter = (anchorPointId: string, pointInput: any) => {
     setRoutePoints((prevPoints) => {
-      if (!prevPoints.length) {
-        // se não tiver nada, cai no fluxo normal de add no final
-        // você pode chamar handleAddPoint aqui se quiser manter a lógica atual
-        return prevPoints;
-      }
+      if (!prevPoints.length) return prevPoints;
 
       const anchorIndex = prevPoints.findIndex((p) => p.id === anchorPointId);
-      if (anchorIndex === -1) {
-        // âncora não encontrada: não faz nada (ou poderia cair em add no final)
-        return prevPoints;
-      }
+      if (anchorIndex === -1) return prevPoints;
 
       const loc = pointInput.location;
-
       const stopTimeMin = Number(pointInput.stopTimeMin ?? 5);
 
-      // Aqui criamos um ponto "cru", sem se preocupar com distância/tempo.
-      // O recalcAllRoutePoints vai recalcular tudo com base nas coordenadas.
+      const rawFunctions: PointFunction[] = Array.isArray(pointInput.functions)
+        ? pointInput.functions
+        : defaultFunctionsByPointType(String(pointInput.type ?? ""));
+
       const newPoint: RoutePoint = {
         id: String(loc.id),
-        order: anchorIndex + 2, // valor provisório, será reordenado no recalc
+        order: anchorIndex + 2, // provisório
         type: pointInput.type,
         stopTimeMin,
 
@@ -431,25 +501,69 @@ export function createSchemeHandlers({
 
         justification: pointInput.justification ?? "",
 
-        isRestStop: !!pointInput.isRestStop,
-        isSupportPoint: !!pointInput.isSupportPoint,
-        isDriverChange: !!pointInput.isDriverChange,
-        isBoardingPoint: !!pointInput.isBoardingPoint,
-        isDropoffPoint: !!pointInput.isDropoffPoint,
-        isFreeStop: !!pointInput.isFreeStop,
+        // ✅ contrato público
+        functions: rawFunctions,
 
-        // inserção no meio nunca mexe no ponto inicial;
-        // o recalcAllRoutePoints vai respeitar o isInitial já existente
+        // flags serão derivadas na normalização
         isInitial: false,
       };
 
-      const updated = [...prevPoints];
-      // insere DEPOIS do ponto âncora
-      updated.splice(anchorIndex + 1, 0, newPoint);
+      const normalizedPoint = normalizeRoutePointFunctions(newPoint);
 
-      // recalcula ordem, distâncias, tempos e horários com base no ponto inicial e tripTime
+      const updated = [...prevPoints];
+      updated.splice(anchorIndex + 1, 0, normalizedPoint);
+
       return recalcAllRoutePoints(updated);
     });
+  };
+
+  const handleRefreshDistances = async (pointsInput?: RoutePoint[]) => {
+    const basePoints = pointsInput ?? routePoints;
+    if (basePoints.length < 2) return;
+
+    const updated = basePoints.map((p) => ({ ...p }));
+
+    for (let i = 1; i < updated.length; i++) {
+      const prev = updated[i - 1];
+      const cur = updated[i];
+
+      if (!prev?.location?.id || !cur?.location?.id) continue;
+
+      try {
+        const params = new URLSearchParams({
+          fromLocationId: String(prev.location.id),
+          toLocationId: String(cur.location.id),
+        });
+
+        const res = await fetch(
+          `${API_URL}/road-segments/road-distance?${params.toString()}`
+        );
+
+        if (!res.ok) throw new Error("Falha ao obter distância");
+
+        const data = await res.json();
+        const nextDistanceKm = Number(data.distanceKm);
+
+        if (Number.isFinite(nextDistanceKm) && nextDistanceKm > 0) {
+          const customSpeed =
+            typeof cur.avgSpeed === "number" && cur.avgSpeed > 0
+              ? cur.avgSpeed
+              : undefined;
+
+          updated[i] = {
+            ...cur,
+            distanceKm: nextDistanceKm,
+            driveTimeMin: computeDriveTimeMinutes(nextDistanceKm, customSpeed),
+          };
+        }
+      } catch (err) {
+        console.error("[refreshDistances] erro", err);
+      }
+    }
+
+    // recalcAllRoutePoints também normaliza functions/flags
+    const finalPoints = recalcAllRoutePoints(updated);
+    setRoutePoints(finalPoints);
   };
 
   return {
@@ -461,6 +575,7 @@ export function createSchemeHandlers({
     handleMovePointUp,
     handleMovePointDown,
     handleInsertPointAfter,
+    handleRefreshDistances,
   };
 }
 
@@ -496,22 +611,13 @@ function computeDriveTimeMinutes(
   const SPEED_IN_RANGE = 70; // 10..100 km
   const SPEED_OUT_RANGE = 80; // fora dessa faixa
 
-  // distância inválida ou negativa -> 30 min
-  if (!Number.isFinite(distanceKm) || distanceKm <= 0) {
-    return FIXED_MINUTES;
-  }
+  if (!Number.isFinite(distanceKm) || distanceKm <= 0) return FIXED_MINUTES;
+  if (distanceKm < 15) return FIXED_MINUTES;
 
-  // até 15 km -> sempre 30 min (regra fixa)
-  if (distanceKm < 15) {
-    return FIXED_MINUTES;
-  }
-
-  // se veio velocidade customizada do modal, respeita ela
   let speed: number | null = null;
   if (typeof customSpeed === "number" && customSpeed > 0) {
     speed = customSpeed;
   } else {
-    // regra padrão da planilha
     speed =
       distanceKm >= 10 && distanceKm <= 100 ? SPEED_IN_RANGE : SPEED_OUT_RANGE;
   }
@@ -519,7 +625,6 @@ function computeDriveTimeMinutes(
   const timeHours = distanceKm / speed;
   const minutes = Math.round(timeHours * 60);
 
-  // failsafe: se algo der NaN/Infinity, cai para 30 min
   return Number.isFinite(minutes) && minutes > 0 ? minutes : FIXED_MINUTES;
 }
 
@@ -562,11 +667,6 @@ function recalcTimesFromInitial(
   const startMinutes = toMinutes(tripStartTime);
   if (startMinutes === null) return result;
 
-  // =========================================================
-  // REGRA: tripStartTime (tripTime) = SAÍDA do ponto inicial
-  // - Não empurra saída pelo stopTimeMin do inicial.
-  // - Chegada do inicial = tripStartTime (para evitar confusão visual).
-  // =========================================================
   const initialPoint = result[initialIndex];
   initialPoint.departureTime = tripStartTime;
 
@@ -575,9 +675,7 @@ function recalcTimesFromInitial(
 
   initialPoint.arrivalTime = toTimeString(startMin - stopInitial);
 
-  // ==========================
   // PRA FRENTE
-  // ==========================
   for (let i = initialIndex + 1; i < result.length; i++) {
     const current = result[i];
     const prevPoint = result[i - 1];
@@ -595,14 +693,7 @@ function recalcTimesFromInitial(
     current.departureTime = toTimeString(departureMin);
   }
 
-  // ==========================
   // PRA TRÁS (pré-viagem)
-  // Aqui faz sentido usar stopTimeMin do PRÓPRIO ponto pré-inicial
-  // para chegar "antes" e sair "depois" (se você quiser).
-  //
-  // Se você preferir que pré-viagem só tenha departure,
-  // você pode setar arrivalTime = "" nesses pontos.
-  // ==========================
   for (let i = initialIndex - 1; i >= 0; i--) {
     const current = result[i];
     const nextPoint = result[i + 1];
@@ -614,11 +705,9 @@ function recalcTimesFromInitial(
     const stopNext = nextPoint.stopTimeMin ?? 0;
     const stopCurrent = current.stopTimeMin ?? 0;
 
-    //  Saída do ponto anterior (igual planilha)
     const departureCurrentMin = nextDepartureMin - stopNext - driveToNextMin;
     current.departureTime = toTimeString(departureCurrentMin);
 
-    //  Chegada = Saída - Stop (igual planilha)
     const arrivalCurrentMin = departureCurrentMin - stopCurrent;
     current.arrivalTime = toTimeString(arrivalCurrentMin);
   }
