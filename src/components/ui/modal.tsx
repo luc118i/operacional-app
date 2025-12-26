@@ -23,7 +23,10 @@ export function Modal({
         bg-[rgba(0,0,0,0.75)]
         px-4
       "
-      onClick={onClose}
+      onClick={(e) => {
+        // ✅ fecha SOMENTE se clicar no backdrop (fora do conteúdo)
+        if (e.target === e.currentTarget) onClose();
+      }}
     >
       <div
         className={`
@@ -32,7 +35,6 @@ export function Modal({
           max-h-[90vh] overflow-y-auto
           ${contentClassName ?? ""}
         `}
-        onClick={(e) => e.stopPropagation()} // não fecha ao clicar dentro
       >
         {children}
       </div>

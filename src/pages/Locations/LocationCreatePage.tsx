@@ -227,7 +227,7 @@ export function LocationCreatePage({ onBack }: LocationCreatePageProps) {
       if (ufFromText && ufFromText !== uf) {
         setUf(ufFromText);
       }
-      console.log("Recovered full code:", code);
+
 
       // Se for curto, completa com recoverNearest
       if (olc.isShort(code)) {

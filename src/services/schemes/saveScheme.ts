@@ -43,6 +43,39 @@ function mapRoutePointsToApiPayload(
 
     const p = point as RoutePoint & { establishment?: string };
 
+    // ✅ pega functions do ponto (se existir no seu RoutePoint)
+    const functions = Array.isArray((point as any).functions)
+      ? ((point as any).functions as string[])
+      : [];
+
+    // ✅ derive flags (fonte principal: functions)
+    const trocaMotorista =
+      functions.includes("TROCA_MOTORISTA") || !!(point as any).isDriverChange;
+
+    const isRestStop =
+      functions.includes("DESCANSO") || !!(point as any).isRestStop;
+
+    const isSupportPoint =
+      functions.includes("APOIO") || !!(point as any).isSupportPoint;
+
+    const isBoardingPoint =
+      functions.includes("EMBARQUE") || !!(point as any).isBoardingPoint;
+
+    const isDropoffPoint =
+      functions.includes("DESEMBARQUE") || !!(point as any).isDropoffPoint;
+
+    const isFreeStop =
+      functions.includes("PARADA_LIVRE") || !!(point as any).isFreeStop;
+
+    // (opcional) se você quiser manter “ponto_operacional” como derivado:
+    const pontoOperacional =
+      trocaMotorista ||
+      isRestStop ||
+      isSupportPoint ||
+      isBoardingPoint ||
+      isDropoffPoint ||
+      isFreeStop;
+
     return {
       scheme_id: schemeId,
       ordem,
@@ -58,18 +91,19 @@ function mapRoutePointsToApiPayload(
       is_initial: !!point.isInitial,
       is_final: index === routePoints.length - 1,
 
+      road_segment_uuid: ordem === 1 ? null : point.roadSegmentUuid ?? null,
+
       estabelecimento: p.establishment ?? null,
       justificativa: point.justification ?? null,
 
-      // ✅ flags operação / ANTT (fonte de verdade no backend)
-      troca_motorista: !!point.isDriverChange,
-      ponto_operacional: false, // (quando existir no front, mapear daqui)
+      troca_motorista: trocaMotorista,
+      ponto_operacional: pontoOperacional,
 
-      is_rest_stop: !!point.isRestStop,
-      is_support_point: !!point.isSupportPoint,
-      is_boarding_point: !!point.isBoardingPoint,
-      is_dropoff_point: !!point.isDropoffPoint,
-      is_free_stop: !!point.isFreeStop,
+      is_rest_stop: isRestStop,
+      is_support_point: isSupportPoint,
+      is_boarding_point: isBoardingPoint,
+      is_dropoff_point: isDropoffPoint,
+      is_free_stop: isFreeStop,
     };
   });
 }

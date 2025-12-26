@@ -1,4 +1,4 @@
-// src/components/.../AddPointModal.tsx
+// src/components/scheme/AddPointModal.tsx
 import { Search, MapPin, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Input } from "@/components/ui/input";
@@ -14,7 +14,7 @@ import {
 
 export type ModalPreset = {
   pointType?: string; // "PA" | "TMJ" etc
-  functions?: string[]; // ["DESCANSO"] | ["APOIO"] | ["TROCA_MOTORISTA"]
+  functions?: PointFunction[];
   justification?: string;
 };
 
@@ -25,8 +25,9 @@ interface AddPointModalProps {
   onSetInitial: (point: any) => void;
   canSetInitial: boolean;
   initialPoint: RoutePoint | null;
-
   preset?: ModalPreset | null;
+
+  presetLocked?: boolean;
 }
 
 const pointTypes = [
@@ -131,6 +132,7 @@ export function AddPointModal({
   canSetInitial,
   initialPoint,
   preset,
+  presetLocked = false,
 }: AddPointModalProps) {
   const {
     searchTerm,
@@ -149,30 +151,40 @@ export function AddPointModal({
   const [avgSpeed, setAvgSpeed] = useState(80);
   const [justification, setJustification] = useState("");
 
-  const [suppressTypeDefaultsOnce, setSuppressTypeDefaultsOnce] =
-    useState(false);
-
-  // ✅ contrato público: única fonte de verdade para funções ANTT
   const [functions, setFunctions] = useState<ANTTFunctionKey[]>(() =>
     defaultFunctionsByPointType("PP")
   );
 
-  // Quando muda o tipo, sugerimos defaults (e sobrescrevemos a seleção atual).
-  // Se você quiser "manter marcações" quando muda tipo, aí a regra muda — mas por ora está consistente com seu fluxo.
+  const [hasPresetApplied, setHasPresetApplied] = useState(false);
+
+  // ✅ aplica preset quando abrir modal
   useEffect(() => {
-    // evita que o preset (que seta pointType) seja sobrescrito pelo default
-    if (suppressTypeDefaultsOnce) {
-      setSuppressTypeDefaultsOnce(false);
-      return;
+    if (!isOpen) return;
+
+    // sempre que abrir, aplica preset se existir (como sugestão)
+    if (preset?.pointType) setPointType(preset.pointType);
+
+    if (preset?.functions?.length) {
+      // em vez de substituir totalmente, você pode:
+      // A) substituir (preset como ponto de partida)
+      setFunctions(uniq(preset.functions as ANTTFunctionKey[]));
+
+      // ou B) mesclar com o que já está (depende do UX desejado)
+      // setFunctions((prev) => uniq([...prev, ...(preset.functions as ANTTFunctionKey[])]));
     }
 
-    setFunctions(defaultFunctionsByPointType(pointType));
-  }, [pointType, suppressTypeDefaultsOnce]);
+    if (typeof preset?.justification === "string") {
+      setJustification(preset.justification);
+    }
+  }, [isOpen, preset]);
 
-  // Flags derivadas (compat/UI). Não viram state: evitamos dupla fonte.
-  const flags = useMemo(() => {
-    return deriveFlagsFromFunctions(functions);
-  }, [functions]);
+  // ✅ quando muda tipo, aplica defaults SOMENTE se não veio preset
+  useEffect(() => {
+    if (presetLocked) return;
+    setFunctions(defaultFunctionsByPointType(pointType));
+  }, [pointType, presetLocked]);
+
+  const flags = useMemo(() => deriveFlagsFromFunctions(functions), [functions]);
 
   const resetForm = () => {
     setSearchTerm("");
@@ -182,30 +194,10 @@ export function AddPointModal({
     setLocalTime(20);
     setAvgSpeed(80);
     setJustification("");
-
     setFunctions(defaultFunctionsByPointType("PP"));
+
+    setHasPresetApplied(false);
   };
-
-  useEffect(() => {
-    if (!isOpen) return;
-    if (!preset) return;
-
-    // 1) trava o auto-default UMA vez (porque vamos setar pointType via preset)
-    setSuppressTypeDefaultsOnce(true);
-
-    // 2) aplica presets
-    if (preset.pointType) setPointType(preset.pointType);
-
-    if (preset.functions?.length) {
-      // normaliza para o seu tipo (PointFunction) e remove duplicados
-      const normalized = uniq(preset.functions as ANTTFunctionKey[]);
-      setFunctions(normalized);
-    }
-
-    if (preset.justification !== undefined) {
-      setJustification(preset.justification);
-    }
-  }, [isOpen, preset]);
 
   const handleClose = () => {
     resetForm();
@@ -214,6 +206,7 @@ export function AddPointModal({
 
   const buildPayloadFromLocation = (location: LocationOption) => {
     const normalizedFunctions = uniq(functions);
+
     const derived = deriveFlagsFromFunctions(normalizedFunctions);
 
     return {
@@ -227,50 +220,45 @@ export function AddPointModal({
         lat: Number(location.lat ?? 0),
         lng: Number(location.lng ?? 0),
       },
-
       type: pointType,
       stopTimeMin: localTime,
       avgSpeed: Number(avgSpeed),
       justification,
-
-      // ✅ contrato público
       functions: normalizedFunctions,
-
-      // ✅ compat enquanto o resto do front ainda usa flags
-      ...derived,
+      ...derived, // compat flags
     };
   };
 
   const handleAdd = () => {
     if (!selectedLocation) return;
-    const payload = buildPayloadFromLocation(selectedLocation);
-    onAdd(payload);
+    onAdd(buildPayloadFromLocation(selectedLocation));
     handleClose();
   };
 
   const handleSetInitialLocal = () => {
     if (!selectedLocation) return;
-    const payload = buildPayloadFromLocation(selectedLocation);
-    onSetInitial(payload);
+    onSetInitial(buildPayloadFromLocation(selectedLocation));
     handleClose();
   };
 
   const toggleFunction = (id: ANTTFunctionKey) => {
-    setFunctions((prev) => {
-      const next = prev.includes(id)
-        ? prev.filter((f) => f !== id)
-        : [...prev, id];
-      return uniq(next);
-    });
+    if (presetLocked) return;
+    setFunctions((prev) =>
+      uniq(prev.includes(id) ? prev.filter((f) => f !== id) : [...prev, id])
+    );
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={handleClose} contentClassName="max-w-3xl">
-      {/* Header */}
+    <Modal
+      isOpen={isOpen}
+      onClose={handleClose}
+      contentClassName="max-w-3xl pointer-events-auto relative z-[60]"
+    >
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-lg font-semibold text-slate-900">
           Adicionar Ponto à Rota
         </h2>
+
         <button
           type="button"
           onClick={handleClose}
@@ -282,7 +270,6 @@ export function AddPointModal({
       </div>
 
       <div className="space-y-6 mt-2">
-        {/* Busca de Local */}
         <div className="space-y-3">
           <Label>Buscar Local Cadastrado</Label>
           <div className="relative">
@@ -295,7 +282,6 @@ export function AddPointModal({
             />
           </div>
 
-          {/* Ponto inicial da rota */}
           <div className="mt-2">
             <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wide mb-1">
               Ponto inicial da rota
@@ -338,7 +324,6 @@ export function AddPointModal({
             )}
           </div>
 
-          {/* Lista de Resultados */}
           {searchTerm && (
             <div className="border border-slate-200 rounded-lg max-h-64 overflow-y-auto">
               {isLoading ? (
@@ -351,6 +336,7 @@ export function AddPointModal({
                 <div className="divide-y divide-slate-100">
                   {locations.map((location) => (
                     <button
+                      type="button"
                       key={location.id}
                       onClick={() => selectLocation(location)}
                       className={`w-full text-left p-3 hover:bg-slate-50 transition-colors ${
@@ -388,7 +374,6 @@ export function AddPointModal({
           )}
         </div>
 
-        {/* Informações do Local Selecionado */}
         {selectedLocation && (
           <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
             <div className="flex items-start justify-between mb-3">
@@ -399,6 +384,7 @@ export function AddPointModal({
                 </p>
               </div>
               <Button
+                type="button"
                 variant="ghost"
                 size="sm"
                 onClick={clearSelection}
@@ -425,19 +411,21 @@ export function AddPointModal({
           </div>
         )}
 
-        {/* Configurações do Ponto */}
         {selectedLocation && (
           <div className="space-y-4 pt-4 border-t border-slate-200">
             <h3 className="text-slate-900">Configurações do Ponto</h3>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* Tipo de Ponto */}
               <div className="space-y-2">
                 <Label>Tipo de Ponto</Label>
                 <select
                   value={pointType}
-                  onChange={(e) => setPointType(e.target.value)}
-                  className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  disabled={presetLocked}
+                  onChange={(e) => {
+                    if (presetLocked) return;
+                    setPointType(e.target.value);
+                  }}
+                  className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:opacity-60"
                 >
                   {pointTypes.map((type) => (
                     <option key={type.value} value={type.value}>
@@ -447,7 +435,6 @@ export function AddPointModal({
                 </select>
               </div>
 
-              {/* Tempo no Local */}
               <div className="space-y-2">
                 <Label>Tempo no Local</Label>
                 <select
@@ -463,7 +450,6 @@ export function AddPointModal({
                 </select>
               </div>
 
-              {/* Velocidade Média */}
               <div className="space-y-2">
                 <Label>Velocidade Média (km/h)</Label>
                 <Input
@@ -475,7 +461,6 @@ export function AddPointModal({
                 />
               </div>
 
-              {/* Funções ANTT deste ponto */}
               <div className="space-y-2">
                 <Label>Funções ANTT deste ponto</Label>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -504,7 +489,6 @@ export function AddPointModal({
               </div>
             </div>
 
-            {/* Justificativa */}
             <div className="space-y-2">
               <Label>Justificativa Operacional</Label>
               <Input
@@ -514,12 +498,11 @@ export function AddPointModal({
               />
             </div>
 
-            {/* (Opcional) Preview das flags derivadas para debug/UX */}
+            {/* debug opcional */}
             {/* <pre className="text-xs text-slate-500">{JSON.stringify(flags, null, 2)}</pre> */}
           </div>
         )}
 
-        {/* Botões de Ação */}
         <div className="flex gap-3 justify-end pt-4 border-t border-slate-200">
           <Button variant="outline" type="button" onClick={handleClose}>
             Cancelar

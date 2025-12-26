@@ -518,52 +518,80 @@ export function createSchemeHandlers({
   };
 
   const handleRefreshDistances = async (pointsInput?: RoutePoint[]) => {
-    const basePoints = pointsInput ?? routePoints;
-    if (basePoints.length < 2) return;
+    const base = pointsInput ?? routePoints;
+    if (base.length < 2) return;
 
-    const updated = basePoints.map((p) => ({ ...p }));
+    const ordered = [...base].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    const updated = ordered.map((p) => ({ ...p }));
 
     for (let i = 1; i < updated.length; i++) {
       const prev = updated[i - 1];
       const cur = updated[i];
 
-      if (!prev?.location?.id || !cur?.location?.id) continue;
+      const fromLocationId =
+        prev.location?.id ??
+        (prev as any).locationId ??
+        (prev as any).location_id;
+
+      const toLocationId =
+        cur.location?.id ?? (cur as any).locationId ?? (cur as any).location_id;
+
+      if (!fromLocationId || !toLocationId) continue;
 
       try {
         const params = new URLSearchParams({
-          fromLocationId: String(prev.location.id),
-          toLocationId: String(cur.location.id),
+          fromLocationId: String(fromLocationId),
+          toLocationId: String(toLocationId),
         });
 
         const res = await fetch(
           `${API_URL}/road-segments/road-distance?${params.toString()}`
         );
-
         if (!res.ok) throw new Error("Falha ao obter distância");
 
         const data = await res.json();
-        const nextDistanceKm = Number(data.distanceKm);
 
-        if (Number.isFinite(nextDistanceKm) && nextDistanceKm > 0) {
+        // ✅ novos campos do endpoint
+        const roadSegmentUuid = data.roadSegmentUuid ?? null;
+        const nextDistanceKm = Number(data.distanceKm);
+        const durationMinRaw = data.durationMin;
+        const durationMin =
+          durationMinRaw == null ? null : Number(durationMinRaw);
+
+        if (Number.isFinite(nextDistanceKm) && nextDistanceKm >= 0) {
+          // se o backend já devolveu durationMin, use-o
+          // senão, mantém sua regra de computeDriveTimeMinutes
           const customSpeed =
-            typeof cur.avgSpeed === "number" && cur.avgSpeed > 0
-              ? cur.avgSpeed
+            typeof (cur as any).avgSpeed === "number" &&
+            (cur as any).avgSpeed > 0
+              ? (cur as any).avgSpeed
               : undefined;
+
+          const nextDriveTimeMin =
+            Number.isFinite(durationMin as number) &&
+            (durationMin as number) >= 0
+              ? Math.round(durationMin as number)
+              : computeDriveTimeMinutes(nextDistanceKm, customSpeed);
 
           updated[i] = {
             ...cur,
             distanceKm: nextDistanceKm,
-            driveTimeMin: computeDriveTimeMinutes(nextDistanceKm, customSpeed),
-          };
+            driveTimeMin: nextDriveTimeMin,
+
+            // ✅ persistir no ponto para salvar no scheme_points depois
+            roadSegmentUuid: roadSegmentUuid ?? undefined,
+          } as any;
         }
       } catch (err) {
         console.error("[refreshDistances] erro", err);
       }
     }
 
-    // recalcAllRoutePoints também normaliza functions/flags
     const finalPoints = recalcAllRoutePoints(updated);
-    setRoutePoints(finalPoints);
+
+    // re-mapeia por id para não “embaralhar” o estado original
+    const byId = new Map(finalPoints.map((p) => [p.id, p] as const));
+    setRoutePoints((prev) => prev.map((p) => byId.get(p.id) ?? p));
   };
 
   return {

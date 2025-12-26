@@ -1,5 +1,5 @@
+// CreateSchemePage.tsx
 import { useState, useMemo, useEffect, useRef } from "react";
-
 import { ArrowLeft, Plus, Save, Map, X, RefreshCcw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -8,50 +8,44 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 import { RoutePointCard } from "@/components/scheme/RoutePointCard";
-import { AddPointModal } from "@/components/scheme/AddPointModal";
+import {
+  AddPointModal,
+  type ModalPreset,
+} from "@/components/scheme/AddPointModal";
 import { RouteSummary } from "@/components/scheme/RouteSummary";
-
-import type { RoutePoint } from "@/types/scheme";
-import { createSchemeHandlers, type Line } from "./createSchemeHandlers";
 import { InitialRoutePointCard } from "@/components/scheme/InitialRoutePointCard";
+import { ViolationActionDivider } from "@/components/scheme/ViolationActionDivider";
+
+import type { RoutePoint, PointFunction } from "@/types/scheme";
+import { createSchemeHandlers, type Line } from "./createSchemeHandlers";
 
 import {
   buildRulesOverviewFromIssues,
+  normalizeFromBackendEvaluation,
+  mapIssuesToPointAlerts,
   type RulesSourceUsed,
+  type BackendEvaluationResponse,
+  type BackendEvaluationResult,
 } from "@/lib/rules";
 
 import { useSaveScheme } from "@/hooks/useSaveScheme";
-
 import { mapToOperationalScheme } from "@/lib/mapToOperationalScheme";
 import type { OperationalScheme } from "@/types/scheme";
-import { API_URL } from "@/services/api";
-import {
-  normalizeFromBackendEvaluation,
-  mapIssuesToPointAlerts,
-  type BackendEvaluationResponse,
-} from "@/lib/rules";
 
-interface CreateSchemePageProps {
-  onBack: () => void;
-}
+import { API_URL } from "@/services/api";
 
 import type {
   SchemeDraft,
   Direction as DraftDirection,
 } from "@/services/schemes/saveScheme";
-
 import { findSchemeByKey } from "@/services/schemes/saveScheme";
-import { ViolationActionDivider } from "@/components/scheme/ViolationActionDivider";
+
+interface CreateSchemePageProps {
+  onBack: () => void;
+}
 
 type Direction = "ida" | "volta";
-
 type ModalMode = "add" | "editInitial" | "insertAfter" | null;
-
-type ModalPreset = {
-  pointType?: string; // "PA" | "TMJ" etc
-  functions?: string[]; // ["DESCANSO"] | ["APOIO"] | ["TROCA_MOTORISTA"]
-  justification?: string;
-};
 
 export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
   const [lineCode, setLineCode] = useState("");
@@ -59,17 +53,23 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
   const [direction, setDirection] = useState<Direction | "">("");
   const [tripTime, setTripTime] = useState<string>("");
   const [routePoints, setRoutePoints] = useState<RoutePoint[]>([]);
+
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState<ModalMode>(null);
+  const [modalPreset, setModalPreset] = useState<ModalPreset | null>(null);
+
   const [insertAfterPointId, setInsertAfterPointId] = useState<string | null>(
     null
   );
+
   const [editingSchemeId, setEditingSchemeId] = useState<string | null>(null);
   const [isLoadingExisting, setIsLoadingExisting] = useState(false);
+  const [isRefreshingDistances, setIsRefreshingDistances] = useState(false);
+
   const lookupTimeoutRef = useRef<number | null>(null);
 
-  const [modalPreset, setModalPreset] = useState<ModalPreset | null>(null);
   const { isSaving, error, save } = useSaveScheme();
+
   const {
     handleLineCodeChange,
     handleAddPoint,
@@ -89,6 +89,7 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
     setLineCode,
     setIsModalOpen,
   });
+
   const [backendEvaluation, setBackendEvaluation] =
     useState<BackendEvaluationResponse | null>(null);
 
@@ -100,13 +101,16 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
     return map;
   }, [backendEvaluation]);
 
-  // ✅ regras de exibição
+  // Em geral, você quer renderizar a lista ordenada (não a original)
+  const sortedRoutePoints = useMemo(() => {
+    return [...routePoints].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  }, [routePoints]);
+
   const canShowLineDetails = !!selectedLine && !!direction && !!tripTime;
   const canShowPointsSection = !!selectedLine && !!direction && !!tripTime;
   const canSaveScheme =
     !!selectedLine && !!direction && !!tripTime && routePoints.length > 0;
 
-  // ✅ textos derivados da linha
   const lineDisplayName =
     selectedLine?.municipioOrigem && selectedLine?.municipioDestino
       ? `${selectedLine.municipioOrigem} - ${selectedLine.municipioDestino}`
@@ -116,10 +120,8 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
     ? `${selectedLine.ufOrigem} ${selectedLine.municipioOrigem} → ${selectedLine.ufDestino} ${selectedLine.municipioDestino}`
     : "";
 
-  // ponto inicial REAL da rota (se já foi definido)
   const currentInitialPoint = routePoints.find((p) => p.isInitial) ?? null;
 
-  // ✅ ponto inicial / final conforme sentido
   const initialCity =
     currentInitialPoint?.location?.city ??
     (direction === "ida"
@@ -134,6 +136,7 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
     direction === "ida"
       ? selectedLine?.municipioDestino
       : selectedLine?.municipioOrigem;
+
   const finalState =
     direction === "ida" ? selectedLine?.ufDestino : selectedLine?.ufOrigem;
 
@@ -151,6 +154,7 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
     overview: rulesOverview,
     sourceUsed,
   } = useMemo(() => {
+    // Mantive sua regra original: só mostra/considera backend se estiver editando
     if (!editingSchemeId || !backendEvaluation) {
       const emptyIssues: any[] = [];
       const source: RulesSourceUsed = "none";
@@ -174,29 +178,22 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
     };
   }, [editingSchemeId, backendEvaluation, routePoints]);
 
-  // 🔍 Busca orgânica por esquema existente (linha + sentido + horário)
   useEffect(() => {
-    // Se ainda não tem os três campos preenchidos, não busca
     if (!lineCode || !direction || !tripTime) {
       setEditingSchemeId(null);
       setBackendEvaluation(null);
       setIsLoadingExisting(false);
-      // opcional: se quiser limpar a tela quando mudar a configuração:
-      // setRoutePoints([]);
       return;
     }
 
-    // Limpa timeout anterior (debounce)
     if (lookupTimeoutRef.current !== null) {
       window.clearTimeout(lookupTimeoutRef.current);
     }
 
-    // Debounce de ~400ms para não bater no backend a cada tecla
     lookupTimeoutRef.current = window.setTimeout(async () => {
       try {
         setIsLoadingExisting(true);
 
-        // 1) Verifica se existe esquema com essa combinação
         const existing = await findSchemeByKey(
           lineCode,
           direction as DraftDirection,
@@ -204,47 +201,31 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
         );
 
         if (!existing) {
-          // Não existe -> novo esquema
           setEditingSchemeId(null);
           setBackendEvaluation(null);
-          // Se quiser, também pode limpar os pontos aqui:
-          // setRoutePoints([]);
           return;
         }
 
-        // 2) Já existe esquema com essa combinação -> modo edição
         setEditingSchemeId(existing.id);
 
-        // 3) Carrega o esquema completo + pontos
         const operational = await loadOperationalSchemeById(existing.id);
-
-        // 3.1) Carrega regras (backend) do esquema
         const evaluation = await loadRulesEvaluationBySchemeId(existing.id);
+
         setBackendEvaluation(evaluation);
-
-        // 4) Joga os pontos do esquema carregado na tela de criação/edição
         setRoutePoints(operational.routePoints ?? []);
 
-        // 4) Joga os pontos do esquema carregado na tela de criação/edição
-        setRoutePoints(operational.routePoints ?? []);
-
-        // Opcional: garantir que o horário da tela fique igual ao salvo
-        if (operational.tripTime) {
-          setTripTime(operational.tripTime);
-        }
+        if (operational.tripTime) setTripTime(operational.tripTime);
       } catch (err) {
         console.error(
           "[CreateSchemePage] erro ao buscar/carregar esquema por chave:",
           err
         );
         setEditingSchemeId(null);
-        // também pode exibir um erro visual se quiser
       } finally {
         setIsLoadingExisting(false);
       }
     }, 400) as unknown as number;
 
-    // Cleanup se os deps mudarem rápido
     return () => {
       if (lookupTimeoutRef.current !== null) {
         window.clearTimeout(lookupTimeoutRef.current);
@@ -252,49 +233,75 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
     };
   }, [lineCode, direction, tripTime]);
 
-  /**
-   * Confirmação genérica de ponto vindo do modal:
-   * - "add": adiciona no final
-   * - "insertAfter": insere após um ponto existente
-   * - "editInitial": atualiza dados do ponto inicial
-   *
-   * O fechamento do modal continua sendo responsabilidade
-   * do próprio AddPointModal (via onClose).
-   */
+  useEffect(() => {
+    const sorted = [...routePoints].sort(
+      (a, b) => (a.order ?? 0) - (b.order ?? 0)
+    );
+
+    console.log(
+      "[DBG] routePoints len:",
+      routePoints.length,
+      "sorted len:",
+      sorted.length
+    );
+
+    const p = sorted[10];
+    console.log("[DBG] sorted[10] exists?", !!p);
+
+    if (!p) {
+      console.log(
+        "[DBG] first 5 orders:",
+        sorted.slice(0, 5).map((x) => x.order)
+      );
+      return;
+    }
+
+    console.log("[DBG] id:", p.id, "order:", p.order);
+
+    console.log("[DBG] km candidates:", {
+      distancia_km: (p as any).distancia_km,
+      distance_km: (p as any).distance_km,
+      distancia_km_trecho: (p as any).distancia_km_trecho,
+      distancia_km_acumulada: (p as any).distancia_km_acumulada,
+      distancia_total_km: (p as any).distancia_total_km,
+    });
+
+    console.log("[DBG] time candidates:", {
+      duracao_min: (p as any).duracao_min,
+      duration_min: (p as any).duration_min,
+      travel_time_min: (p as any).travel_time_min,
+      tempo_min: (p as any).tempo_min,
+    });
+  }, [routePoints]);
+
   const handleConfirmPointFromModal = async (pointInput: any) => {
     if (modalMode === "insertAfter" && insertAfterPointId) {
       handleInsertPointAfter(insertAfterPointId, pointInput);
-    } else if (modalMode === "add") {
+      return;
+    }
+
+    if (modalMode === "add") {
       await handleAddPoint(pointInput);
-    } else if (modalMode === "editInitial") {
-      // fluxo específico de edição do ponto inicial
+      return;
+    }
+
+    if (modalMode === "editInitial") {
       handleUpdatePoint(pointInput.id, pointInput);
     }
   };
 
-  /**
-   * Fluxo para "Definir como ponto inicial" vindo do modal:
-   * - se o ponto já existe na rota, só recalcula horários a partir dele;
-   * - se não existe, adiciona e depois marca como inicial.
-   */
   const handleAddPointAsInitial = async (pointFromModal: any) => {
     const locId = String(pointFromModal.location.id);
 
-    if (!tripTime) {
-      // opcional: toast avisando que precisa definir "Horário da Viagem"
-      return;
-    }
+    if (!tripTime) return;
 
-    // 1) verifica se o ponto já existe
     const existing = routePoints.find(
       (p) => p.location?.id === locId || p.id === locId
     );
 
     if (existing) {
-      // já existe: só recalcula horários a partir dele
       handleSetInitialPoint(existing.id, tripTime);
     } else {
-      // NÃO existe: primeiro adiciona, depois marca como inicial
       await handleAddPoint(pointFromModal);
       handleSetInitialPoint(locId, tripTime);
     }
@@ -305,27 +312,18 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
       return;
     }
 
-    // 1) tenta descobrir se já existe esquema com essa chave
     let existingSchemeId: string | undefined;
 
     try {
-      const existing = await findSchemeByKey(
-        lineCode,
-        direction as "ida" | "volta",
-        tripTime
-      );
-      if (existing) {
-        existingSchemeId = existing.id;
-      }
+      const existing = await findSchemeByKey(lineCode, direction, tripTime);
+      if (existing) existingSchemeId = existing.id;
     } catch (err) {
       console.error(
         "[CreateSchemePage] erro ao verificar esquema existente:",
         err
       );
-      // se quiser, pode dar um toast e abortar aqui
     }
 
-    // 2) Origem/destino a partir dos pontos
     const firstPoint = routePoints[0];
     const lastPoint = routePoints[routePoints.length - 1];
 
@@ -340,28 +338,22 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
     }
 
     const draft: SchemeDraft = {
-      schemeId: existingSchemeId, // se existir, edita; se não, cria
-
+      schemeId: existingSchemeId,
       lineCode,
       lineName:
         lineDisplayName ||
         origemDestinoText ||
         lineCode ||
         "Esquema operacional",
-
       originLocationId,
       destinationLocationId,
-
-      direction: direction as "ida" | "volta",
+      direction,
       tripTime,
       routePoints,
     };
 
     const result = await save(draft);
-
-    if (result && result.schemeId) {
-      onBack();
-    }
+    if (result && result.schemeId) onBack();
   };
 
   async function loadRulesEvaluationBySchemeId(
@@ -370,9 +362,7 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
     try {
       const url = `${API_URL}/scheme-points/schemes/${id}/points/evaluation`;
       const res = await fetch(url);
-
       if (!res.ok) return null;
-
       return (await res.json()) as BackendEvaluationResponse;
     } catch (err) {
       console.error("[CreateSchemePage] erro ao carregar evaluation:", err);
@@ -382,35 +372,35 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
 
   function getBestActionableResult(
     ev?: BackendEvaluationResponse["avaliacao"][number]
-  ) {
-    if (!ev?.results?.length) return null;
+  ): BackendEvaluationResult | null {
+    const results = ev?.results ?? [];
 
-    // prioridade: CRITICAL/BLOCKING > WARNING > resto
-    const withRemediation = ev.results.filter(
-      (r: any) => r?.violation?.remediation
+    if (!results.length) return null;
+
+    const actionable = results.filter(
+      (r) => !!r?.violation?.remediation || !!r?.violation?.expected?.function
     );
 
-    if (!withRemediation.length) return null;
+    if (!actionable.length) return null;
 
-    // se tiver severity, prioriza. senão pega o primeiro.
-    withRemediation.sort((a: any, b: any) => {
+    actionable.sort((a, b) => {
       const rank = (s?: string) =>
         s === "BLOCKING" ? 3 : s === "WARNING" ? 2 : s === "INFO" ? 1 : 0;
       return rank(b?.violation?.severity) - rank(a?.violation?.severity);
     });
 
-    return withRemediation[0];
+    return actionable[0];
   }
 
   function presetFromExpected(expected?: {
     function?: string;
     point_type?: string;
-  }) {
-    const fn = expected?.function;
+  }): ModalPreset {
+    const fn = expected?.function as PointFunction | undefined;
 
     if (fn === "DESCANSO") return { pointType: "PA", functions: ["DESCANSO"] };
     if (fn === "APOIO")
-      return { pointType: "PA", functions: ["DESCANSO", "APOIO"] }; // ou só ["APOIO"] se preferir
+      return { pointType: "PA", functions: ["DESCANSO", "APOIO"] };
     if (fn === "TROCA_MOTORISTA")
       return { pointType: "TMJ", functions: ["TROCA_MOTORISTA"] };
 
@@ -446,25 +436,22 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
     const pointsJson = await pointsRes.json();
     const summaryJson = summaryRes.ok ? await summaryRes.json() : undefined;
 
-    // Usa o mesmo mapper da SchemeDetailPage
-    const operational = mapToOperationalScheme(
-      schemeJson,
-      pointsJson,
-      summaryJson
-    );
-
-    return operational;
+    return mapToOperationalScheme(schemeJson, pointsJson, summaryJson);
   }
 
-  const [isRefreshingDistances, setIsRefreshingDistances] = useState(false);
-
+  // ===============================
+  // ✅ CORREÇÃO DO ERRO:
+  // - NÃO existe map no "nível do componente".
+  // - O componente deve retornar UM JSX só.
+  // - O map fica DENTRO da seção de lista.
+  // ===============================
   return (
     <div className="min-h-screen">
-      {/* Header */}
       <div className="bg-white border-b border-slate-200 shadow-sm sticky top-0 z-10">
         <div className="max-w-7xl mx-auto px-4 md:px-8 py-4">
           <div className="flex items-center gap-4">
             <Button
+              type="button"
               variant="outline"
               onClick={onBack}
               className="border-slate-300 hover:bg-slate-50"
@@ -477,14 +464,11 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
         </div>
       </div>
 
-      {/* Main Content */}
       <div className="max-w-7xl mx-auto px-4 md:px-8 py-8 space-y-6">
-        {/* Card de Informações Iniciais */}
         <Card className="p-6 bg-white shadow-sm border-slate-200">
           <h2 className="text-slate-900 mb-4">Informações da Linha</h2>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            {/* Código da Linha */}
             <div className="space-y-2">
               <Label htmlFor="lineCode">Código da Linha</Label>
               <Input
@@ -496,7 +480,6 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
               />
             </div>
 
-            {/* Sentido */}
             <div className="space-y-2">
               <Label htmlFor="direction">Sentido</Label>
               <select
@@ -511,7 +494,6 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
               </select>
             </div>
 
-            {/* Horário da Viagem */}
             <div className="space-y-2">
               <Label htmlFor="tripTime">Horário da Viagem</Label>
               <Input
@@ -523,17 +505,15 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
             </div>
           </div>
 
-          {/* Informações Carregadas da Linha */}
-
           {editingSchemeId && (
             <div className="mt-4 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
               Já existe um esquema para esta linha, sentido e horário. Você está
               editando esse esquema.
             </div>
           )}
+
           {canShowLineDetails && selectedLine && (
             <div className="mt-6 pt-6 border-t border-slate-200 space-y-4">
-              {/* Nome da linha / Origem-Destino */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <Label className="text-slate-600">Nome da Linha</Label>
@@ -560,7 +540,6 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
                 </div>
               </div>
 
-              {/* Empresa / Situação */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <Label className="text-slate-600">Empresa</Label>
@@ -585,7 +564,6 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
                 </div>
               </div>
 
-              {/* Ponto Inicial + Ponto Final */}
               <div className="mt-4">
                 <Label className="text-slate-600">Pontos principais</Label>
 
@@ -595,6 +573,7 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
                     className="text-left p-4 bg-blue-50 border border-blue-200 rounded-lg hover:border-blue-300 transition flex flex-col justify-between"
                     onClick={() => {
                       setModalMode("editInitial");
+                      setModalPreset(null);
                       setIsModalOpen(true);
                     }}
                   >
@@ -620,7 +599,6 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
                     )}
                   </button>
 
-                  {/* Ponto final */}
                   <div className="p-4 bg-slate-50 border border-slate-200 rounded-lg flex flex-col justify-between">
                     <div className="mb-1">
                       <span className="text-xs font-semibold uppercase text-slate-500">
@@ -642,7 +620,6 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
           )}
         </Card>
 
-        {/* Lista de Pontos da Rota */}
         {canShowPointsSection && (
           <Card className="p-6 bg-white shadow-sm border-slate-200">
             <div className="flex items-center justify-between mb-6">
@@ -653,9 +630,15 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
                   type="button"
                   variant="outline"
                   onClick={async () => {
+                    console.log("[UI] clicar atualizar distancias", {
+                      size: routePoints.length,
+                    });
                     setIsRefreshingDistances(true);
                     try {
                       await handleRefreshDistances();
+                      console.log("[UI] handleRefreshDistances finalizou");
+                    } catch (e) {
+                      console.error("[UI] handleRefreshDistances falhou", e);
                     } finally {
                       setIsRefreshingDistances(false);
                     }
@@ -679,8 +662,10 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
                 </Button>
 
                 <Button
+                  type="button"
                   onClick={() => {
                     setModalMode("add");
+                    setModalPreset(null); // 🔴 ESSENCIAL
                     setIsModalOpen(true);
                   }}
                   className="bg-blue-600 hover:bg-blue-700"
@@ -692,9 +677,8 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
               </div>
             </div>
 
-            {routePoints.length === 0 ? (
+            {sortedRoutePoints.length === 0 ? (
               isLoadingExisting ? (
-                // ⏳ Estado de carregamento enquanto busca esquema existente
                 <div className="flex flex-col items-center justify-center py-12 text-slate-500">
                   <div className="h-8 w-8 rounded-full border-2 border-blue-500 border-t-transparent animate-spin mb-3" />
                   <p className="text-sm text-slate-600">
@@ -703,7 +687,6 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
                   </p>
                 </div>
               ) : (
-                // 🧩 Empty state padrão quando NÃO está carregando nada
                 <div className="text-center py-12 text-slate-500">
                   <Map className="w-12 h-12 mx-auto mb-3 opacity-30" />
                   <p>Nenhum ponto adicionado ainda</p>
@@ -715,33 +698,42 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
               )
             ) : (
               <div className="space-y-4">
-                {routePoints.map((point, index) => {
-                  const ordem = index + 1; // seu UI usa index+1
+                {sortedRoutePoints.map((point, index) => {
+                  const ordem = Number(point.order ?? index + 1);
                   const ev = evaluationByOrder[ordem];
+
                   const best = getBestActionableResult(ev);
 
-                  const shouldShowDivider = index > 0 && !!best;
+                  const targetOrdem =
+                    best?.violation?.remediation?.target_ordem;
+
+                  // Mostrar o divider somente quando o ponto atual for o alvo (ou fallback)
+                  const shouldShowDivider =
+                    index > 0 &&
+                    !!best &&
+                    (targetOrdem ? targetOrdem === ordem : true);
 
                   return (
                     <div key={point.id} className="space-y-2">
                       {shouldShowDivider && (
                         <ViolationActionDivider
-                          title={best.message} // pode ser mais curto se preferir
-                          suggestion={best?.violation?.remediation?.suggestion}
+                          title={best!.message}
+                          suggestion={
+                            best?.violation?.remediation?.suggestion ??
+                            "Adicionar um ponto conforme a função esperada pelo backend."
+                          }
                           expectedFunction={best?.violation?.expected?.function}
                           onAdd={() => {
-                            // insere “entre” cards: após o anterior, antes do atual
-                            const prevId = String(routePoints[index - 1].id);
+                            const prevId = String(
+                              sortedRoutePoints[index - 1].id
+                            );
 
                             setModalMode("insertAfter");
                             setInsertAfterPointId(prevId);
 
-                            // preset guiado pelo backend
-                            const preset = presetFromExpected(
-                              best?.violation?.expected
+                            setModalPreset(
+                              presetFromExpected(best?.violation?.expected)
                             );
-                            setModalPreset(preset);
-
                             setIsModalOpen(true);
                           }}
                         />
@@ -758,7 +750,7 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
                         <RoutePointCard
                           point={point}
                           index={index}
-                          previousPoint={routePoints[index - 1]}
+                          previousPoint={sortedRoutePoints[index - 1]}
                           alerts={anttAlertsByPointId[point.id] ?? []}
                           onUpdate={handleUpdatePoint}
                           onDelete={handleDeletePoint}
@@ -767,7 +759,7 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
                           onInsertAfter={(id) => {
                             setModalMode("insertAfter");
                             setInsertAfterPointId(id);
-                            setModalPreset(null); // aqui é manual, sem preset
+                            setModalPreset(null);
                             setIsModalOpen(true);
                           }}
                         />
@@ -780,10 +772,9 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
           </Card>
         )}
 
-        {/* Resumo Final */}
-        {routePoints.length > 0 && (
+        {sortedRoutePoints.length > 0 && (
           <RouteSummary
-            routePoints={routePoints}
+            routePoints={sortedRoutePoints}
             tripStartTime={tripTime}
             ruleIssues={ruleIssues}
             rulesOverview={rulesOverview}
@@ -791,7 +782,6 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
           />
         )}
 
-        {/* Ações Finais */}
         {canSaveScheme && (
           <Card className="p-6 bg-white shadow-sm border-slate-200">
             <div className="flex flex-wrap gap-3 justify-end">
@@ -819,10 +809,11 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
         )}
       </div>
 
-      {/* Modal de Adicionar Ponto */}
       <AddPointModal
         isOpen={isModalOpen}
         preset={modalPreset}
+        //presetLocked={false}
+
         onClose={() => {
           setIsModalOpen(false);
           setModalMode(null);

@@ -46,6 +46,8 @@ export interface RoutePoint {
   isInitial?: boolean;
 
   functions?: PointFunction[];
+
+  roadSegmentUuid?: string | null;
 }
 
 export interface InitialPoint {
