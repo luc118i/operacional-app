@@ -53,13 +53,13 @@ export function HomePage({
 
   const allSnapshots = useMemo<SchemeCardSnapshot[]>(() => {
     return schemes.map((item: SchemeListItem) =>
-      mapListItemToCardSnapshot(item)
+      mapListItemToCardSnapshot(item),
     );
   }, [schemes]);
 
   const recentSnapshots = loadRecentSchemes();
   const [favoriteSnapshots, setFavoriteSnapshots] = useState(
-    loadFavoriteSchemes()
+    loadFavoriteSchemes(),
   );
 
   if (loading) {
@@ -106,6 +106,10 @@ export function HomePage({
   function handleOpenSnapshot(snapshot: SchemeCardSnapshot) {
     addRecentScheme(snapshot);
     onViewScheme(snapshot.schemeId);
+  }
+
+  function normalizeDirection(dir: "ida" | "volta"): "Ida" | "Volta" {
+    return dir === "ida" ? "Ida" : "Volta";
   }
 
   return (

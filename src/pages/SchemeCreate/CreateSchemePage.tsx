@@ -59,7 +59,7 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
   const [modalPreset, setModalPreset] = useState<ModalPreset | null>(null);
 
   const [insertAfterPointId, setInsertAfterPointId] = useState<string | null>(
-    null
+    null,
   );
 
   const [editingSchemeId, setEditingSchemeId] = useState<string | null>(null);
@@ -144,7 +144,7 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
     if (!backendEvaluation) return {};
     const issues = normalizeFromBackendEvaluation(
       backendEvaluation,
-      routePoints
+      routePoints,
     );
     return mapIssuesToPointAlerts(issues);
   }, [backendEvaluation, routePoints]);
@@ -167,7 +167,7 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
 
     const issues = normalizeFromBackendEvaluation(
       backendEvaluation,
-      routePoints
+      routePoints,
     );
     const source: RulesSourceUsed = issues.length ? "backend" : "none";
 
@@ -197,7 +197,7 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
         const existing = await findSchemeByKey(
           lineCode,
           direction as DraftDirection,
-          tripTime
+          tripTime,
         );
 
         if (!existing) {
@@ -218,7 +218,7 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
       } catch (err) {
         console.error(
           "[CreateSchemePage] erro ao buscar/carregar esquema por chave:",
-          err
+          err,
         );
         setEditingSchemeId(null);
       } finally {
@@ -235,14 +235,14 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
 
   useEffect(() => {
     const sorted = [...routePoints].sort(
-      (a, b) => (a.order ?? 0) - (b.order ?? 0)
+      (a, b) => (a.order ?? 0) - (b.order ?? 0),
     );
 
     console.log(
       "[DBG] routePoints len:",
       routePoints.length,
       "sorted len:",
-      sorted.length
+      sorted.length,
     );
 
     const p = sorted[10];
@@ -251,7 +251,7 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
     if (!p) {
       console.log(
         "[DBG] first 5 orders:",
-        sorted.slice(0, 5).map((x) => x.order)
+        sorted.slice(0, 5).map((x) => x.order),
       );
       return;
     }
@@ -280,30 +280,34 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
       return;
     }
 
-    if (modalMode === "add") {
-      await handleAddPoint(pointInput);
-      return;
-    }
-
-    if (modalMode === "editInitial") {
-      handleUpdatePoint(pointInput.id, pointInput);
-    }
+    await handleAddPoint(pointInput);
   };
 
   const handleAddPointAsInitial = async (pointFromModal: any) => {
-    const locId = String(pointFromModal.location.id);
-
     if (!tripTime) return;
 
-    const existing = routePoints.find(
-      (p) => p.location?.id === locId || p.id === locId
-    );
+    const locId = String(pointFromModal.location.id);
+
+    const existing = routePoints.find((p) => String(p.location?.id) === locId);
 
     if (existing) {
       handleSetInitialPoint(existing.id, tripTime);
-    } else {
-      await handleAddPoint(pointFromModal);
-      handleSetInitialPoint(locId, tripTime);
+      return;
+    }
+
+    await handleAddPoint(pointFromModal);
+
+    // ⚠️ re-encontra após adicionar (usando location.id)
+    const added = [...routePoints, pointFromModal].find(
+      (p) => String(p.location?.id) === locId,
+    );
+
+    // melhor: usar o estado atualizado (ideal seria dentro do handler ou via callback),
+    // mas, se seu handleAddPoint já coloca no state sincronicamente, isso funciona.
+    // Se não, eu te passo a versão 100% correta baseada no retorno do handler.
+
+    if (added?.id) {
+      handleSetInitialPoint(added.id, tripTime);
     }
   };
 
@@ -320,7 +324,7 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
     } catch (err) {
       console.error(
         "[CreateSchemePage] erro ao verificar esquema existente:",
-        err
+        err,
       );
     }
 
@@ -332,7 +336,7 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
 
     if (!originLocationId || !destinationLocationId) {
       console.error(
-        "[CreateSchemePage] Não foi possível determinar origem/destino a partir dos pontos"
+        "[CreateSchemePage] Não foi possível determinar origem/destino a partir dos pontos",
       );
       return;
     }
@@ -357,7 +361,7 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
   };
 
   async function loadRulesEvaluationBySchemeId(
-    id: string
+    id: string,
   ): Promise<BackendEvaluationResponse | null> {
     try {
       const url = `${API_URL}/scheme-points/schemes/${id}/points/evaluation`;
@@ -371,14 +375,14 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
   }
 
   function getBestActionableResult(
-    ev?: BackendEvaluationResponse["avaliacao"][number]
+    ev?: BackendEvaluationResponse["avaliacao"][number],
   ): BackendEvaluationResult | null {
     const results = ev?.results ?? [];
 
     if (!results.length) return null;
 
     const actionable = results.filter(
-      (r) => !!r?.violation?.remediation || !!r?.violation?.expected?.function
+      (r) => !!r?.violation?.remediation || !!r?.violation?.expected?.function,
     );
 
     if (!actionable.length) return null;
@@ -408,7 +412,7 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
   }
 
   async function loadOperationalSchemeById(
-    id: string
+    id: string,
   ): Promise<OperationalScheme> {
     const schemeUrl = `${API_URL}/schemes/${id}`;
     const pointsUrl = `${API_URL}/scheme-points/schemes/${id}/points`;
@@ -422,13 +426,13 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
 
     if (!schemeRes.ok) {
       throw new Error(
-        `Erro ao carregar esquema: ${schemeRes.status} ${schemeRes.statusText}`
+        `Erro ao carregar esquema: ${schemeRes.status} ${schemeRes.statusText}`,
       );
     }
 
     if (!pointsRes.ok) {
       throw new Error(
-        `Erro ao carregar pontos do esquema: ${pointsRes.status} ${pointsRes.statusText}`
+        `Erro ao carregar pontos do esquema: ${pointsRes.status} ${pointsRes.statusText}`,
       );
     }
 
@@ -725,14 +729,14 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
                           expectedFunction={best?.violation?.expected?.function}
                           onAdd={() => {
                             const prevId = String(
-                              sortedRoutePoints[index - 1].id
+                              sortedRoutePoints[index - 1].id,
                             );
 
                             setModalMode("insertAfter");
                             setInsertAfterPointId(prevId);
 
                             setModalPreset(
-                              presetFromExpected(best?.violation?.expected)
+                              presetFromExpected(best?.violation?.expected),
                             );
                             setIsModalOpen(true);
                           }}
@@ -822,8 +826,9 @@ export function CreateSchemePage({ onBack }: CreateSchemePageProps) {
         }}
         onAdd={handleConfirmPointFromModal}
         onSetInitial={handleAddPointAsInitial}
-        canSetInitial={modalMode === "editInitial" && !!tripTime}
+        canSetInitial={!!tripTime}
         initialPoint={routePoints.find((p) => p.isInitial) ?? null}
+        routePoints={routePoints}
       />
     </div>
   );

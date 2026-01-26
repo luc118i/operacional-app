@@ -192,7 +192,7 @@ export interface SchemeCardSnapshot {
   // Para ordenação/exibição
   createdAt: string; // scheme.created_at
   updatedAt?: string; // scheme.updated_at
-  direction: "ida" | "volta";
+  direction?: "Ida" | "Volta";
 }
 
 export const RECENT_SCHEMES_KEY = "operationalPanel:recentSchemes";
