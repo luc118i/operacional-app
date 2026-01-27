@@ -16,7 +16,7 @@ import { Button } from "@/components/ui/button";
 import { ANTTAlert } from "@/components/scheme/ANTTAlert";
 
 import type { RoutePoint } from "@/types/scheme";
-import type { ANTTAlertData } from "@/lib/anttRules";
+import type { ANTTAlertData } from "@/lib/rules";
 
 interface RoutePointCardProps {
   point: RoutePoint;

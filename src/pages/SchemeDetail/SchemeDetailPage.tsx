@@ -1,5 +1,20 @@
-// src/pages/SchemeDetail/SchemeDetailPage.tsx
+import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, MapPin } from "lucide-react";
+
+import { API_URL } from "@/services/api";
+import { computeANTTAlertsForRoute } from "@/lib/anttRules";
+
+import {
+  normalizeFromBackendEvaluation,
+  buildRulesOverviewFromIssues,
+} from "@/lib/rules";
+
+import type {
+  BackendEvaluationResponse,
+  RuleIssue,
+  RulesOverview,
+  RulesSourceUsed,
+} from "@/lib/rules";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -10,15 +25,14 @@ import { DetailSummary } from "@/components/scheme/DetailSummary";
 import { DetailFirstPointCard } from "@/components/scheme/DetailFirstPointCard";
 
 import { useScheme } from "@/hooks/useScheme";
-
 import linhasJson from "@/data/lista-de-linhas.json";
+import { normalizeFromLocalAlerts } from "@/lib/rules/normalizeLocal";
 
 interface SchemeDetailPageProps {
   schemeId: string;
   onBack: () => void;
 }
 
-// Tipagem básica do JSON (ajuste se tiver mais campos)
 type LinhaMeta = {
   Prefixo: string;
   "Nome Empresa": string;
@@ -31,8 +45,138 @@ type LinhaMeta = {
   Situação: string;
 };
 
+export type ANTTAlertData = {
+  type: "success" | "warning" | "error";
+  message: string;
+};
+
 export function SchemeDetailPage({ schemeId, onBack }: SchemeDetailPageProps) {
   const { data: scheme, loading, error } = useScheme(schemeId);
+
+  const [backendEvaluation, setBackendEvaluation] =
+    useState<BackendEvaluationResponse | null>(null);
+
+  const [ruleIssues, setRuleIssues] = useState<RuleIssue[]>([]);
+  const [rulesOverview, setRulesOverview] = useState<RulesOverview | undefined>(
+    undefined
+  );
+  const [rulesSourceUsed, setRulesSourceUsed] =
+    useState<RulesSourceUsed>("none");
+
+  // routePoints estável
+  const routePoints = useMemo(() => scheme?.routePoints ?? [], [scheme]);
+
+  /**
+   * Carrega avaliação do backend UMA vez, e a partir dela:
+   * - alimenta os cards (alertsByOrder)
+   * - alimenta summary (ruleIssues/overview) normalizando backend
+   *
+   * Fallback local SOMENTE se backend falhar.
+   */
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadRules() {
+      if (!schemeId || routePoints.length === 0) {
+        setBackendEvaluation(null);
+        setRuleIssues([]);
+        setRulesOverview(undefined);
+        setRulesSourceUsed("none");
+        return;
+      }
+
+      // 1) backend first (fonte de verdade para o Detail)
+      try {
+        const url = `${API_URL}/scheme-points/schemes/${schemeId}/points/evaluation`;
+        const res = await fetch(url);
+
+        if (!res.ok) throw new Error(`Backend evaluation HTTP ${res.status}`);
+
+        const json = (await res.json()) as BackendEvaluationResponse;
+
+        if (cancelled) return;
+
+        // ✅ guarda payload para os cards (OK/SUGESTAO/ALERTA)
+        setBackendEvaluation(json);
+
+        // ✅ summary: normaliza SEM exigir "issues.length > 0"
+        const backendIssues = normalizeFromBackendEvaluation(json, routePoints);
+
+        setRuleIssues(backendIssues);
+        setRulesOverview(
+          buildRulesOverviewFromIssues(backendIssues, "backend")
+        );
+        setRulesSourceUsed("backend");
+        return;
+      } catch (e) {
+        console.error("[SchemeDetailPage] backend evaluation failed:", e);
+      }
+
+      // 2) fallback local (somente se backend falhar)
+      try {
+        const alertsByPointId = computeANTTAlertsForRoute(routePoints);
+        const localIssues = normalizeFromLocalAlerts(
+          alertsByPointId,
+          routePoints
+        );
+
+        if (cancelled) return;
+
+        setBackendEvaluation(null);
+        setRuleIssues(localIssues);
+        setRulesOverview(
+          buildRulesOverviewFromIssues(
+            localIssues,
+            localIssues.length ? "local" : "none"
+          )
+        );
+        setRulesSourceUsed(localIssues.length ? "local" : "none");
+      } catch (e) {
+        console.error("[SchemeDetailPage] local fallback failed:", e);
+        if (!cancelled) {
+          setBackendEvaluation(null);
+          setRuleIssues([]);
+          setRulesOverview(undefined);
+          setRulesSourceUsed("none");
+        }
+      }
+    }
+
+    loadRules();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [schemeId, routePoints]);
+
+  /**
+   * Adapta payload do backend para o formato do componente ANTTAlert:
+   * type: success|warning|error + message
+   *
+   * Observação: backend indexa por "ordem" (1..N). Casamos com point.order.
+   */
+  const alertsByOrder = useMemo<Record<number, ANTTAlertData[]>>(() => {
+    if (!backendEvaluation?.avaliacao) return {};
+
+    const out: Record<number, ANTTAlertData[]> = {};
+
+    for (const p of backendEvaluation.avaliacao) {
+      const ordem = Number(p.ordem);
+      const list = Array.isArray(p.results) ? p.results : [];
+
+      out[ordem] = list.map((r) => ({
+        type:
+          r.status === "OK"
+            ? "success"
+            : r.status === "SUGESTAO"
+            ? "warning"
+            : "error", // ALERTA
+        message: String(r.message ?? "").trim(),
+      }));
+    }
+
+    return out;
+  }, [backendEvaluation]);
 
   if (loading) {
     return (
@@ -50,15 +194,11 @@ export function SchemeDetailPage({ schemeId, onBack }: SchemeDetailPageProps) {
     );
   }
 
-  // ✅ única fonte de verdade para pontos: routePoints
-  const routePoints = scheme.routePoints ?? [];
-
-  // ✅ ponto inicial REAL: isInitial (fallback: índice 0)
+  // ponto inicial REAL: isInitial (fallback índice 0)
   const initialIndex = routePoints.findIndex((p) => p.isInitial);
   const safeInitialIndex = initialIndex >= 0 ? initialIndex : 0;
   const initialRoutePoint = routePoints[safeInitialIndex] ?? null;
 
-  // ✅ display do ponto inicial vem SEMPRE do routePoints (não usa scheme.initialPoint)
   const displayInitialPoint = initialRoutePoint
     ? {
         name: initialRoutePoint.location?.name ?? "",
@@ -67,7 +207,7 @@ export function SchemeDetailPage({ schemeId, onBack }: SchemeDetailPageProps) {
       }
     : null;
 
-  // ✅ JSON ANTT
+  // JSON ANTT
   const linhas = linhasJson as LinhaMeta[];
   const linhaMeta = linhas.find((l) => l.Prefixo === scheme.lineCode);
 
@@ -197,7 +337,7 @@ export function SchemeDetailPage({ schemeId, onBack }: SchemeDetailPageProps) {
             </div>
           </div>
 
-          {/* Ponto Inicial (somente routePoints) */}
+          {/* Ponto Inicial */}
           <div className="mt-4 pt-4 border-t border-slate-200">
             <label className="text-slate-600 text-sm mb-2 block">
               Ponto Inicial
@@ -243,7 +383,12 @@ export function SchemeDetailPage({ schemeId, onBack }: SchemeDetailPageProps) {
                 }
 
                 return (
-                  <DetailPointCard key={point.id} point={point} index={index} />
+                  <DetailPointCard
+                    key={point.id}
+                    point={point}
+                    index={index}
+                    alerts={alertsByOrder[Number(point.order)] ?? []}
+                  />
                 );
               })
             ) : (
@@ -257,6 +402,9 @@ export function SchemeDetailPage({ schemeId, onBack }: SchemeDetailPageProps) {
         <DetailSummary
           scheme={{ ...scheme, routePoints }}
           linhaMeta={linhaMeta}
+          ruleIssues={ruleIssues}
+          rulesOverview={rulesOverview}
+          rulesSourceUsed={rulesSourceUsed}
         />
       </div>
     </div>
@@ -269,14 +417,11 @@ function getSituacaoClasses(status: string) {
   if (normalized.includes("ativa")) {
     return "border-emerald-300 text-emerald-700 bg-emerald-50";
   }
-
   if (normalized.includes("susp")) {
     return "border-amber-300 text-amber-700 bg-amber-50";
   }
-
   if (normalized.includes("inativa") || normalized.includes("baixada")) {
     return "border-slate-300 text-slate-700 bg-slate-50";
   }
-
   return "border-slate-300 text-slate-700 bg-slate-50";
 }

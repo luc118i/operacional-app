@@ -3,10 +3,10 @@ import type { RoutePoint } from "@/types/scheme";
 
 export type ANTTAlertType = "success" | "warning" | "error";
 
-export interface ANTTAlertData {
-  type: ANTTAlertType;
+export type ANTTAlertData = {
+  type: "success" | "warning" | "error";
   message: string;
-}
+};
 
 // Limiares de regra (fácil de ajustar depois)
 const FIRST_REST_MIN = 262; // km

@@ -1,4 +1,3 @@
-// src/components/scheme/DetailSummary.tsx
 import {
   Clock,
   Route,
@@ -8,6 +7,8 @@ import {
   AlertTriangle,
 } from "lucide-react";
 
+import type { RuleIssue, RulesOverview, RulesSourceUsed } from "@/lib/rules";
+
 import { Card } from "@/components/ui/card";
 import type { OperationalScheme, RoutePoint } from "@/types/scheme";
 import type { LinhaMeta } from "@/types/linhas";
@@ -15,9 +16,19 @@ import type { LinhaMeta } from "@/types/linhas";
 interface DetailSummaryProps {
   scheme: OperationalScheme & { routePoints: RoutePoint[] };
   linhaMeta?: LinhaMeta;
+
+  ruleIssues?: RuleIssue[];
+  rulesOverview?: RulesOverview;
+  rulesSourceUsed?: RulesSourceUsed;
 }
 
-export function DetailSummary({ scheme, linhaMeta }: DetailSummaryProps) {
+export function DetailSummary({
+  scheme,
+  linhaMeta,
+  ruleIssues,
+  rulesOverview,
+  rulesSourceUsed,
+}: DetailSummaryProps) {
   // 🔢 Valores vindos do summary da API (mapToOperationalScheme)
   const totalKm = scheme.totalKm ?? 0;
   const totalStops = scheme.totalStops ?? 0;
@@ -27,6 +38,7 @@ export function DetailSummary({ scheme, linhaMeta }: DetailSummaryProps) {
   const totalStopMinutes = scheme.totalStopMinutes ?? 0;
   const totalDurationMinutes =
     scheme.totalDurationMinutes ?? totalTravelMinutes + totalStopMinutes;
+
   const totalPcs = scheme.totalPontos ?? 0;
 
   const averageSpeedKmH =
@@ -35,6 +47,11 @@ export function DetailSummary({ scheme, linhaMeta }: DetailSummaryProps) {
       ? Number((totalKm / (totalTravelMinutes / 60)).toFixed(1))
       : 0);
 
+  /**
+   * Se você quiser, dá para trocar isso futuramente para usar `rulesOverview`
+   * (contrato novo) em vez de `scheme.rulesStatus`.
+   * Por ora, mantive exatamente como estava.
+   */
   const rulesStatus = scheme.rulesStatus ?? {
     status: "OK",
     message: "Dentro das regras",
@@ -120,17 +137,14 @@ export function DetailSummary({ scheme, linhaMeta }: DetailSummaryProps) {
 
           <p className="text-slate-600 text-sm mb-1">Paradas em PCs</p>
 
-          {/* Número principal: PCs REALIZADOS */}
           <p className="text-slate-900 text-2xl">{totalPcs}</p>
 
-          {/* Texto auxiliar: contexto do esperado */}
           <p className="text-slate-600 text-sm mt-1">
             realizado{totalPcs !== 1 ? "s" : ""} de{" "}
             <span className="font-semibold">{expectedStops}</span> esperado
             {expectedStops !== 1 ? "s" : ""}.
           </p>
 
-          {/* Regra de cálculo */}
           <p className="text-slate-500 text-xs mt-1">
             ({totalKm.toFixed(0)} km / 495)
           </p>

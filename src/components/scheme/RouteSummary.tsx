@@ -10,9 +10,15 @@ import {
 import { Card } from "@/components/ui/card";
 import type { RoutePoint } from "@/types/scheme";
 
+import type { RuleIssue, RulesOverview, RulesSourceUsed } from "@/lib/rules";
+
 interface RouteSummaryProps {
   routePoints: RoutePoint[];
   tripStartTime: string;
+
+  ruleIssues?: RuleIssue[];
+  rulesOverview?: RulesOverview;
+  rulesSourceUsed?: RulesSourceUsed;
 
   // Infos já mescladas (banco + JSON) vindo de fora
   originCity?: string;
@@ -29,6 +35,10 @@ interface RouteSummaryProps {
 export function RouteSummary({
   routePoints,
   tripStartTime,
+  ruleIssues,
+  rulesOverview,
+  rulesSourceUsed,
+
   originCity,
   originState,
   destinationCity,
@@ -70,6 +80,9 @@ export function RouteSummary({
       : "0.0";
 
   const statusStyles = getStatusStyles(status);
+
+  const issues = ruleIssues ?? [];
+  const overview = rulesOverview;
 
   return (
     <Card className="p-6 bg-gradient-to-br from-slate-50 to-white border-slate-200 shadow-sm">
@@ -194,35 +207,88 @@ export function RouteSummary({
       </div>
 
       {/* Resumo ANTT */}
+      {/* Resumo ANTT / Regras */}
       <div className="border-t border-slate-200 pt-4">
         <h3 className="text-slate-900 mb-3">Conformidade ANTT</h3>
-        <div className="space-y-2">
-          {anttChecks.map((check, index) => (
+
+        {overview ? (
+          <div className="space-y-2">
             <div
-              key={index}
               className={`flex items-start gap-3 p-3 rounded-lg border ${
-                check.compliant
+                overview.overallStatus === "OK"
                   ? "bg-green-50 border-green-200"
+                  : overview.overallStatus === "WARNING"
+                  ? "bg-amber-50 border-amber-200"
                   : "bg-red-50 border-red-200"
               }`}
             >
-              {check.compliant ? (
+              {overview.overallStatus === "OK" ? (
                 <CheckCircle className="w-5 h-5 text-green-600 mt-0.5" />
               ) : (
                 <AlertCircle className="w-5 h-5 text-red-600 mt-0.5" />
               )}
+
               <div className="flex-1">
                 <p
                   className={`text-sm ${
-                    check.compliant ? "text-green-800" : "text-red-800"
+                    overview.overallStatus === "OK"
+                      ? "text-green-800"
+                      : overview.overallStatus === "WARNING"
+                      ? "text-amber-800"
+                      : "text-red-800"
                   }`}
                 >
-                  {check.message}
+                  {overview.summaryMessage}
+                </p>
+
+                <p className="mt-1 text-xs text-slate-600">
+                  Fonte:{" "}
+                  {rulesSourceUsed === "backend"
+                    ? "Backend"
+                    : rulesSourceUsed === "local"
+                    ? "Fallback local"
+                    : "—"}{" "}
+                  • Alertas: {overview.alertCount} • Sugestões:{" "}
+                  {overview.suggestionCount}
                 </p>
               </div>
             </div>
-          ))}
-        </div>
+
+            {/* Lista curta (top 5) */}
+            {issues.length > 0 && (
+              <div className="space-y-2">
+                {issues.slice(0, 5).map((i) => (
+                  <div
+                    key={i.key}
+                    className={`flex items-start gap-3 p-3 rounded-lg border ${
+                      i.severity === "ALERT"
+                        ? "bg-red-50 border-red-200"
+                        : "bg-amber-50 border-amber-200"
+                    }`}
+                  >
+                    {i.severity === "ALERT" ? (
+                      <AlertCircle className="w-5 h-5 text-red-600 mt-0.5" />
+                    ) : (
+                      <AlertCircle className="w-5 h-5 text-amber-600 mt-0.5" />
+                    )}
+                    <div className="flex-1">
+                      <p className="text-sm text-slate-800">{i.message}</p>
+                      <p className="mt-1 text-xs text-slate-600">
+                        Ponto #{i.anchor.order}
+                        {i.anchor.label ? ` • ${i.anchor.label}` : ""} •{" "}
+                        {i.ruleCode}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="text-sm text-slate-600">
+            Sem avaliação de regras disponível.
+          </div>
+        )}
       </div>
 
       {/* Horários */}

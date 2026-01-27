@@ -1,13 +1,19 @@
-import { Clock, MapPin, Gauge, Route } from "lucide-react";
+import { Clock, Gauge, Route } from "lucide-react";
 
 import { Card } from "@/components/ui/card";
 import { ANTTAlert } from "@/components/scheme/ANTTAlert";
 
 import type { RoutePoint } from "@/types/scheme";
 
+export type ANTTAlertData = {
+  type: "success" | "warning" | "error";
+  message: string;
+};
+
 interface DetailPointCardProps {
   point: RoutePoint;
   index: number;
+  alerts?: ANTTAlertData[]; // ✅ vem pronto (backend) ou vazio
 }
 
 const pointTypeLabels: Record<string, string> = {
@@ -19,7 +25,49 @@ const pointTypeLabels: Record<string, string> = {
   PL: "Ponto Livre",
 };
 
-export function DetailPointCard({ point, index }: DetailPointCardProps) {
+function getPointBadges(point: RoutePoint) {
+  const badges: { key: string; label: string; title: string }[] = [];
+
+  // ✅ Prioridade operacional
+  if (point.isDriverChange) {
+    badges.push({ key: "TM", label: "TM", title: "Troca de motorista" });
+  }
+
+  if (point.isSupportPoint) {
+    badges.push({ key: "AP", label: "AP", title: "Ponto de apoio" });
+  }
+
+  // OP (ponto_operacional) — só quando existir no RoutePoint no futuro
+  // if ((point as any).isOperationalPoint) {
+  //   badges.push({ key: "OP", label: "OP", title: "Ponto operacional" });
+  // }
+
+  if (point.isFreeStop) {
+    badges.push({ key: "LV", label: "LV", title: "Parada livre" });
+  }
+
+  // Evitar redundância com o tipo principal
+  if (point.isBoardingPoint && point.type !== "PE") {
+    badges.push({ key: "EMB", label: "EMB", title: "Embarque" });
+  }
+  if (point.isDropoffPoint && point.type !== "PD") {
+    badges.push({ key: "DES", label: "DES", title: "Desembarque" });
+  }
+
+  // DS nunca (decisão sua)
+  // if (point.isRestStop) ...
+
+  const order = ["TM", "AP", "OP", "LV", "EMB", "DES"];
+  badges.sort((a, b) => order.indexOf(a.key) - order.indexOf(b.key));
+
+  return badges;
+}
+
+export function DetailPointCard({
+  point,
+  index,
+  alerts = [],
+}: DetailPointCardProps) {
   const isInitial = !!point.isInitial;
   const city = point.location?.city ?? "";
   const state = point.location?.state ?? "";
@@ -30,8 +78,7 @@ export function DetailPointCard({ point, index }: DetailPointCardProps) {
     point.driveTimeMin > 0
       ? Number((point.distanceKm / (point.driveTimeMin / 60)).toFixed(1))
       : 0;
-
-  const alerts = generateANTTAlerts(point, index, avgSpeed);
+  const badges = getPointBadges(point);
 
   return (
     <Card
@@ -59,10 +106,7 @@ export function DetailPointCard({ point, index }: DetailPointCardProps) {
                 </h3>
 
                 {isInitial && (
-                  <span
-                    className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px]
-        font-semibold bg-blue-100 text-blue-800 border border-blue-200 whitespace-nowrap"
-                  >
+                  <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold bg-blue-100 text-blue-800 border border-blue-200 whitespace-nowrap">
                     Início da viagem
                   </span>
                 )}
@@ -76,11 +120,28 @@ export function DetailPointCard({ point, index }: DetailPointCardProps) {
           </div>
 
           {/* DIREITA */}
-          <div className="text-right">
-            <p className="text-slate-600 text-xs">Distância Acumulada</p>
-            <p className="text-slate-900 font-medium">
-              {point.cumulativeDistanceKm.toFixed(1)} km
-            </p>
+
+          <div className="flex flex-col items-end gap-2 text-right">
+            {badges.length > 0 && (
+              <div className="flex flex-wrap justify-end gap-1">
+                {badges.map((b) => (
+                  <span
+                    key={b.key}
+                    title={b.title}
+                    className="inline-flex items-center rounded-md border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-700 whitespace-nowrap"
+                  >
+                    {b.label}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            <div>
+              <p className="text-slate-600 text-xs">Distância Acumulada</p>
+              <p className="text-slate-900 font-medium">
+                {(point.cumulativeDistanceKm ?? 0).toFixed(1)} km
+              </p>
+            </div>
           </div>
         </div>
       </div>
@@ -92,7 +153,9 @@ export function DetailPointCard({ point, index }: DetailPointCardProps) {
             <p className="text-slate-600 text-xs mb-1 flex items-center gap-1.5">
               <Clock className="w-3.5 h-3.5" /> Chegada
             </p>
-            <p className="text-slate-900">{point.arrivalTime}</p>
+            <p className="text-slate-900">
+              {formatClockHHMM(point.arrivalTime)}
+            </p>
           </div>
 
           <div>
@@ -108,7 +171,9 @@ export function DetailPointCard({ point, index }: DetailPointCardProps) {
             <p className="text-slate-600 text-xs mb-1 flex items-center gap-1.5">
               <Clock className="w-3.5 h-3.5" /> Saída
             </p>
-            <p className="text-slate-900">{point.departureTime}</p>
+            <p className="text-slate-900">
+              {formatClockHHMM(point.departureTime)}
+            </p>
           </div>
 
           <div>
@@ -135,7 +200,7 @@ export function DetailPointCard({ point, index }: DetailPointCardProps) {
           </div>
         </div>
 
-        {/* Tipo (somente aqui, não no header) */}
+        {/* Tipo */}
         <div className="pb-4 border-b border-slate-200 mb-4">
           <p className="text-slate-600 text-xs mb-1">Tipo de Ponto</p>
           <p className="text-slate-900 text-sm">
@@ -143,7 +208,7 @@ export function DetailPointCard({ point, index }: DetailPointCardProps) {
           </p>
         </div>
 
-        {/* Alertas */}
+        {/* Alertas (vêm do backend) */}
         {alerts.length > 0 && (
           <div>
             <p className="text-slate-600 text-xs mb-2">
@@ -151,7 +216,7 @@ export function DetailPointCard({ point, index }: DetailPointCardProps) {
             </p>
             <div className="space-y-2">
               {alerts.map((alert, i) => (
-                <ANTTAlert key={i} alert={alert} />
+                <ANTTAlert key={`${point.id}-alert-${i}`} alert={alert} />
               ))}
             </div>
           </div>
@@ -170,82 +235,22 @@ function formatMinutesToHours(min: number) {
   return `${String(h).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
 }
 
-interface ANTTAlertData {
-  type: "success" | "warning" | "error";
-  message: string;
-}
+// "26:16" -> "02:16 (+1d)"
+function formatClockHHMM(value?: string) {
+  if (!value) return "—";
+  const [hhStr, mmStr] = value.split(":");
+  const hh = Number(hhStr);
+  const mm = Number(mmStr);
 
-function generateANTTAlerts(
-  point: RoutePoint,
-  index: number,
-  avgSpeed: number
-): ANTTAlertData[] {
-  const alerts: ANTTAlertData[] = [];
-  const accumulated = point.cumulativeDistanceKm ?? 0;
+  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return value;
 
-  // Helper genérico: aplica a regra da margem de 8%
-  // - acima do limite  -> ERROR
-  // - mais de 8% abaixo do limite -> WARNING (antecipado)
-  // - dentro da faixa [92%..100%] -> sem alerta
-  const distanceAlertWithMargin = (
-    label: string,
-    limitKm: number,
-    distanceKm: number
-  ) => {
-    if (!Number.isFinite(distanceKm) || distanceKm <= 0) return;
+  const extraDays = Math.floor(hh / 24);
+  const normalizedH = hh % 24;
 
-    const upper = limitKm;
-    const lower = limitKm * 0.92; // 8% abaixo do limite
+  const base = `${String(normalizedH).padStart(2, "0")}:${String(mm).padStart(
+    2,
+    "0"
+  )}`;
 
-    if (distanceKm > upper) {
-      alerts.push({
-        type: "error",
-        message: `${label} além do limite (${distanceKm.toFixed(
-          1
-        )} / ${upper} km)`,
-      });
-    } else if (distanceKm < lower) {
-      alerts.push({
-        type: "warning",
-        message: `${label} antecipado (${distanceKm.toFixed(1)} / ${upper} km)`,
-      });
-    }
-  };
-
-  // 🔵 1) Primeira parada de descanso – 330 km
-  // (considerando que o índice 0 é o primeiro ponto "depois" da origem)
-  if (index === 0 && point.type === "PP") {
-    distanceAlertWithMargin("Primeiro ponto de parada", 330, accumulated);
-  }
-
-  // 🔵 2) Ponto de apoio – limite 495 km
-  if (point.type === "PA") {
-    distanceAlertWithMargin("Ponto de apoio", 495, accumulated);
-  }
-
-  // 🔵 3) Troca de motorista em jornada – limite 660 km
-  if (point.type === "TMJ") {
-    distanceAlertWithMargin("Troca de motorista", 660, accumulated);
-  }
-
-  // 🔵 4) Velocidade média alta
-  if (avgSpeed > 90) {
-    alerts.push({
-      type: "warning",
-      message: `Velocidade acima da recomendada (${avgSpeed} km/h)`,
-    });
-  }
-
-  // 🔵 5) Tempo de parada muito curto em PP/PA
-  if ((point.type === "PP" || point.type === "PA") && point.stopTimeMin < 20) {
-    alerts.push({
-      type: "warning",
-      message: `O tempo de parada pode ser insuficiente (${formatMinutesToHours(
-        point.stopTimeMin
-      )})`,
-    });
-  }
-
-  // 👇 Nenhum "success" aqui: o card só mostra algo quando há problema
-  return alerts;
+  return extraDays > 0 ? `${base} (+${extraDays}d)` : base;
 }

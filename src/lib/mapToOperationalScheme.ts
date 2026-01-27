@@ -213,6 +213,20 @@ export function mapToOperationalScheme(
 
       isInitial,
 
+      isRestStop: Boolean(p.is_rest_stop),
+      isSupportPoint: Boolean(p.is_support_point),
+      isDriverChange: Boolean(p.troca_motorista),
+      isBoardingPoint: Boolean(p.is_boarding_point),
+      isDropoffPoint: Boolean(p.is_dropoff_point),
+      isFreeStop: Boolean(p.is_free_stop),
+
+      avgSpeed:
+        p.velocidade_media_kmh !== null && p.velocidade_media_kmh !== undefined
+          ? Number(p.velocidade_media_kmh)
+          : undefined,
+
+      justification: p.justificativa ?? undefined,
+
       // 👇 NUNCA null – sempre um objeto, com fallbacks
       location: {
         id: String(loc.id ?? p.location_id ?? ""),
@@ -257,7 +271,7 @@ export function mapToOperationalScheme(
 
     lineCode,
     lineName,
-    direction: scheme.direction ?? "Ida",
+    direction: scheme.direction === "volta" ? "volta" : "ida",
 
     origin,
     originState,

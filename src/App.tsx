@@ -5,6 +5,8 @@ import { SchemeDetailPage } from "./pages/SchemeDetail/SchemeDetailPage";
 import { CreateSchemePage } from "./pages/SchemeCreate/CreateSchemePage";
 import { LocationCreatePage } from "./pages/Locations/LocationCreatePage";
 
+import { SchemeImportWizardPage } from "./pages/Imports/SchemeImportWizardPage";
+
 import { LoginModal } from "./components/auth/LoginModal";
 import { Footer } from "./components/Footer/Footer";
 import { printConsoleInfo } from "./utils/consoleInfo";
@@ -43,7 +45,7 @@ export interface OperationalScheme {
 
   lineCode: string;
   lineName: string;
-  direction: "Ida" | "Volta";
+  direction: "ida" | "volta";
 
   origin: string;
   originState: string;
@@ -76,8 +78,12 @@ export interface OperationalScheme {
   updatedAt?: string;
 }
 
-// 🔥 Agora o state guarda só o ID
-type ViewType = "home" | "detail" | "create" | "createLocation";
+type ViewType =
+  | "home"
+  | "detail"
+  | "create"
+  | "createLocation"
+  | "importSchemes";
 
 export default function App() {
   const [currentView, setCurrentView] = useState<ViewType>("home");
@@ -121,6 +127,15 @@ export default function App() {
   const handleCloseLogin = () => {
     setLoginOpen(false);
   };
+
+  const handleImportSchemes = () => {
+    if (!isAuthenticated) {
+      setLoginOpen(true);
+      return;
+    }
+    setCurrentView("importSchemes");
+  };
+
   useEffect(() => {
     printConsoleInfo();
   }, []);

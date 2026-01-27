@@ -1,3 +1,12 @@
+export type PointFunction =
+  | "DESCANSO"
+  | "APOIO"
+  | "TROCA_MOTORISTA"
+  | "EMBARQUE"
+  | "DESEMBARQUE"
+  | "PARADA_LIVRE"
+  | "OPERACIONAL";
+
 export interface RoutePoint {
   id: string;
   order: number;
@@ -35,6 +44,10 @@ export interface RoutePoint {
   isDropoffPoint?: boolean; // desembarque
   isFreeStop?: boolean; // parada livre / comercial
   isInitial?: boolean;
+
+  functions?: PointFunction[];
+
+  roadSegmentUuid?: string | null;
 }
 
 export interface InitialPoint {
@@ -50,7 +63,7 @@ export interface OperationalScheme {
 
   lineCode: string;
   lineName: string;
-  direction: "Ida" | "Volta";
+  direction: "ida" | "volta";
 
   origin: string;
   originState: string;
@@ -179,7 +192,7 @@ export interface SchemeCardSnapshot {
   // Para ordenação/exibição
   createdAt: string; // scheme.created_at
   updatedAt?: string; // scheme.updated_at
-  direction: "Ida" | "Volta";
+  direction?: "Ida" | "Volta";
 }
 
 export const RECENT_SCHEMES_KEY = "operationalPanel:recentSchemes";

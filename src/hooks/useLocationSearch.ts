@@ -6,6 +6,7 @@ import {
 } from "@/services/locationsService";
 
 export interface LocationOption {
+  shortName: string;
   id: string;
   name: string; // vem de descricao
   city: string; // cidade
@@ -55,6 +56,7 @@ export function useLocationSearch(initialTerm: string = "") {
         const mapped: LocationOption[] = apiLocations.map((loc) => ({
           id: loc.id,
           name: loc.descricao,
+          shortName: loc.sigla || loc.descricao,
           city: loc.cidade,
           state: loc.uf,
           type: loc.tipo,
